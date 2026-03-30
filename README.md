@@ -9,6 +9,7 @@ curl -fsSL https://raw.githubusercontent.com/DjakeDjone/lexica-doc/main/install.
 ```
 
 The installer downloads the source and installs `wors` to `$HOME/.local/bin`.
+It also registers a desktop launcher (`wors.desktop`) so the app appears in your system menu.
 
 ## Run
 
