@@ -16,3 +16,12 @@ It also registers a desktop launcher (`wors.desktop`) so the app appears in your
 ```bash
 wors
 ```
+
+
+## Todos
+
+- [ ] Add support for opening files from the command line
+- [ ] desktop icon
+- [ ] more formatting options
+- [ ] export to PDF
+- *and more...*
