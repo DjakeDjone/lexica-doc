@@ -2,6 +2,7 @@ mod editor_input;
 mod page_layout;
 mod palette;
 
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use eframe::egui::{
@@ -13,7 +14,10 @@ use eframe::egui::{
 
 use crate::{
     app::{CanvasState, ThemeMode},
-    document::{text_format, CharacterStyle, DocumentState, ParagraphAlignment},
+    document::{
+        text_format, CharacterStyle, DocumentImage, DocumentState, ParagraphAlignment,
+        OBJECT_REPLACEMENT_CHAR,
+    },
     layout::{
         centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
         page_content_rect,
@@ -27,6 +31,8 @@ use palette::canvas_palette;
 struct DocumentLayout {
     galley: Arc<egui::Galley>,
     list_markers: Vec<ListMarkerLayout>,
+    images: Vec<ImageLayout>,
+    manual_page_break_rows: Vec<usize>,
 }
 
 struct ListMarkerLayout {
@@ -35,6 +41,12 @@ struct ListMarkerLayout {
     x: f32,
     font_id: FontId,
     color: Color32,
+}
+
+struct ImageLayout {
+    row_index: usize,
+    size: egui::Vec2,
+    image: DocumentImage,
 }
 
 pub fn paint_document_canvas(
@@ -57,7 +69,13 @@ pub fn paint_document_canvas(
         centered_page_rect(viewport, document.page_size, canvas.zoom, egui::Vec2::ZERO);
     let content_size = page_content_rect(base_page_rect, document.margins, canvas.zoom).size();
     let mut document_layout = layout_document(ui, document, canvas, content_size.x);
-    let page_layout = layout_page_stack(viewport, document, canvas, &document_layout.galley);
+    let page_layout = layout_page_stack(
+        viewport,
+        document,
+        canvas,
+        &document_layout.galley,
+        &document_layout.manual_page_break_rows,
+    );
 
     handle_pointer_interaction(
         ui,
@@ -107,14 +125,23 @@ pub fn paint_document_canvas(
             StrokeKind::Outside,
         );
 
+        let visible_content_rect = Rect::from_min_size(
+            page.content_rect.min,
+            egui::vec2(
+                page.content_rect.width(),
+                (page.end_y - page.start_y)
+                    .max(0.0)
+                    .min(page.content_rect.height()),
+            ),
+        );
         let galley_origin = page.content_rect.min - egui::vec2(0.0, page.start_y);
-        painter.with_clip_rect(page.content_rect).galley(
+        painter.with_clip_rect(visible_content_rect).galley(
             galley_origin,
             document_layout.galley.clone(),
             Color32::BLACK,
         );
 
-        let clipped_painter = painter.with_clip_rect(page.content_rect);
+        let clipped_painter = painter.with_clip_rect(visible_content_rect);
         for marker in &document_layout.list_markers {
             let Some(row) = document_layout.galley.rows.get(marker.row_index) else {
                 continue;
@@ -135,6 +162,48 @@ pub fn paint_document_canvas(
                 marker.font_id.clone(),
                 marker.color,
             );
+        }
+
+        for image in &document_layout.images {
+            let Some(row) = document_layout.galley.rows.get(image.row_index) else {
+                continue;
+            };
+            let image_y = row.pos.y;
+            if image_y < page.start_y || image_y > page.end_y {
+                continue;
+            }
+
+            let image_rect = Rect::from_min_size(
+                egui::pos2(
+                    page.content_rect.left() + row.pos.x,
+                    page.content_rect.top() + image_y - page.start_y,
+                ),
+                image.size,
+            );
+
+            if let Some(texture) = texture_for_image(ui.ctx(), canvas, &image.image) {
+                clipped_painter.image(
+                    texture.id(),
+                    image_rect,
+                    Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            } else {
+                clipped_painter.rect_filled(image_rect, CornerRadius::same(4), palette.footer_bg);
+                clipped_painter.rect_stroke(
+                    image_rect,
+                    CornerRadius::same(4),
+                    Stroke::new(1.0, palette.footer_stroke),
+                    StrokeKind::Outside,
+                );
+                clipped_painter.text(
+                    image_rect.center(),
+                    Align2::CENTER_CENTER,
+                    &image.image.alt_text,
+                    FontId::new(12.0, FontFamily::Proportional),
+                    palette.footer_text,
+                );
+            }
         }
     }
 
@@ -209,6 +278,8 @@ fn layout_document(
 
     let mut paragraph_galleys = Vec::new();
     let mut list_markers = Vec::new();
+    let mut images = Vec::new();
+    let mut manual_page_break_rows = Vec::new();
     let mut row_index = 0usize;
 
     for paragraph in document.paragraphs() {
@@ -224,11 +295,21 @@ fn layout_document(
         job.halign = egui::Align::LEFT;
         job.justify = paragraph.style.alignment == ParagraphAlignment::Justify;
 
+        let has_visible_text = paragraph
+            .runs
+            .iter()
+            .any(|run| run.text.chars().any(|ch| ch != OBJECT_REPLACEMENT_CHAR));
+
         if paragraph.runs.is_empty() {
             job.append("", 0.0, text_format(default_style, canvas.zoom));
         } else {
             for run in &paragraph.runs {
-                job.append(&run.text, 0.0, text_format(run.style, canvas.zoom));
+                append_run_with_placeholders(
+                    &mut job,
+                    run,
+                    canvas.zoom,
+                    paragraph.image.is_some() && !has_visible_text,
+                );
             }
         }
 
@@ -238,6 +319,21 @@ fn layout_document(
             .map(|run| run.style)
             .unwrap_or(default_style);
         let mut paragraph_galley = painter.layout_job(job);
+
+        if paragraph.style.page_break_before && row_index > 0 {
+            manual_page_break_rows.push(row_index);
+        }
+
+        if let Some(image) = paragraph.image.clone().filter(|_| !has_visible_text) {
+            let display_size = image_display_size(&image, paragraph_wrap_width, canvas.zoom);
+            if reserve_block_image_space(&mut paragraph_galley, display_size) {
+                images.push(ImageLayout {
+                    row_index,
+                    size: display_size,
+                    image,
+                });
+            }
+        }
         align_paragraph_galley(
             &mut paragraph_galley,
             indent,
@@ -272,6 +368,99 @@ fn layout_document(
             painter.pixels_per_point(),
         )),
         list_markers,
+        images,
+        manual_page_break_rows,
+    }
+}
+
+fn append_run_with_placeholders(
+    job: &mut egui::epaint::text::LayoutJob,
+    run: &crate::document::TextRun,
+    zoom: f32,
+    keep_visible_placeholder: bool,
+) {
+    let mut segment = String::new();
+    for ch in run.text.chars() {
+        if ch == OBJECT_REPLACEMENT_CHAR {
+            if !segment.is_empty() {
+                job.append(&segment, 0.0, text_format(run.style, zoom));
+                segment.clear();
+            }
+
+            let mut placeholder_style = run.style;
+            if !keep_visible_placeholder {
+                placeholder_style.text_color = Color32::TRANSPARENT;
+            }
+            job.append(
+                &OBJECT_REPLACEMENT_CHAR.to_string(),
+                0.0,
+                text_format(placeholder_style, zoom),
+            );
+        } else {
+            segment.push(ch);
+        }
+    }
+
+    if !segment.is_empty() {
+        job.append(&segment, 0.0, text_format(run.style, zoom));
+    }
+}
+
+fn reserve_block_image_space(galley: &mut Arc<egui::Galley>, size: egui::Vec2) -> bool {
+    let galley = Arc::make_mut(galley);
+    let Some(placed_row) = galley.rows.first_mut() else {
+        return false;
+    };
+    let row = Arc::make_mut(&mut placed_row.row);
+    if row.glyphs.len() != 1 || row.glyphs[0].chr != OBJECT_REPLACEMENT_CHAR {
+        return false;
+    }
+
+    row.glyphs[0].advance_width = size.x;
+    row.glyphs[0].line_height = size.y;
+    row.glyphs[0].font_ascent = size.y;
+    row.glyphs[0].font_height = size.y;
+    row.glyphs[0].font_face_ascent = size.y;
+    row.glyphs[0].font_face_height = size.y;
+    row.size = size;
+    row.visuals = Default::default();
+
+    galley.rect = Rect::from_min_size(galley.rect.min, size);
+    galley.mesh_bounds = Rect::NOTHING;
+    true
+}
+
+fn image_display_size(image: &DocumentImage, wrap_width: f32, zoom: f32) -> egui::Vec2 {
+    let width = document_points_to_screen_points(image.width_points.max(24.0), zoom);
+    let height = document_points_to_screen_points(image.height_points.max(24.0), zoom);
+    if width <= wrap_width {
+        return egui::vec2(width, height);
+    }
+
+    let scale = wrap_width / width;
+    egui::vec2(wrap_width, (height * scale).max(24.0))
+}
+
+fn texture_for_image<'a>(
+    ctx: &egui::Context,
+    canvas: &'a mut CanvasState,
+    image: &DocumentImage,
+) -> Option<&'a egui::TextureHandle> {
+    match canvas.image_textures.entry(image.id) {
+        Entry::Occupied(entry) => Some(entry.into_mut()),
+        Entry::Vacant(entry) => {
+            let decoded = ::image::load_from_memory(&image.bytes).ok()?;
+            let rgba = decoded.to_rgba8();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            let color_image =
+                egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw().as_slice());
+            let texture = ctx.load_texture(
+                format!("doc-image-{}", image.id),
+                color_image,
+                egui::TextureOptions::LINEAR,
+            );
+            Some(entry.insert(texture))
+        }
     }
 }
 

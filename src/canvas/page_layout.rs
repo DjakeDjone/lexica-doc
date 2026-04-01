@@ -52,13 +52,14 @@ pub(super) fn layout_page_stack(
     document: &DocumentState,
     canvas: &CanvasState,
     galley: &egui::Galley,
+    manual_page_break_rows: &[usize],
 ) -> PageLayout {
     let page_gap = document_points_to_screen_points(24.0, canvas.zoom);
     let base_page_rect =
         centered_page_rect(viewport, document.page_size, canvas.zoom, egui::Vec2::ZERO);
     let page_size = base_page_rect.size();
     let content_height = page_content_rect(base_page_rect, document.margins, canvas.zoom).height();
-    let page_ranges = compute_page_ranges(galley, content_height);
+    let page_ranges = compute_page_ranges(galley, content_height, manual_page_break_rows);
     let page_count = page_ranges.len().max(1);
     let stack_height =
         page_count as f32 * page_size.y + (page_count.saturating_sub(1) as f32 * page_gap);
@@ -97,7 +98,11 @@ fn caret_rect(galley: &egui::Galley, cursor: CCursor) -> Rect {
     rect.expand2(egui::vec2(0.75, 0.75))
 }
 
-fn compute_page_ranges(galley: &egui::Galley, page_height: f32) -> Vec<(f32, f32)> {
+fn compute_page_ranges(
+    galley: &egui::Galley,
+    page_height: f32,
+    manual_page_break_rows: &[usize],
+) -> Vec<(f32, f32)> {
     if galley.rows.is_empty() {
         return vec![(0.0, page_height)];
     }
@@ -105,10 +110,25 @@ fn compute_page_ranges(galley: &egui::Galley, page_height: f32) -> Vec<(f32, f32
     let mut pages = Vec::new();
     let mut page_start: f32 = 0.0;
     let mut last_row_end: f32 = 0.0;
+    let mut break_rows = manual_page_break_rows.iter().copied().peekable();
 
-    for row in &galley.rows {
+    for (row_index, row) in galley.rows.iter().enumerate() {
         let row_start = row.pos.y;
         let row_end = row.pos.y + row.row.height();
+
+        while break_rows
+            .peek()
+            .copied()
+            .is_some_and(|break_row| break_row == row_index)
+        {
+            if row_start > page_start {
+                pages.push((page_start, last_row_end.max(page_start)));
+            } else if pages.is_empty() {
+                pages.push((page_start, page_start));
+            }
+            page_start = row_start;
+            break_rows.next();
+        }
 
         if row_end - page_start > page_height && row_start > page_start {
             pages.push((page_start, last_row_end.max(page_start)));

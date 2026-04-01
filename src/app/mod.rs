@@ -2,6 +2,7 @@ mod actions;
 mod chrome;
 mod palette;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::{egui, App, CreationContext, Frame};
@@ -24,6 +25,7 @@ pub struct CanvasState {
     pub active_style: CharacterStyle,
     pub active_paragraph_style: ParagraphStyle,
     pub last_interaction_time: f64,
+    pub image_textures: HashMap<usize, egui::TextureHandle>,
 }
 
 impl Default for CanvasState {
@@ -35,6 +37,7 @@ impl Default for CanvasState {
             active_style: CharacterStyle::default(),
             active_paragraph_style: ParagraphStyle::default(),
             last_interaction_time: 0.0,
+            image_textures: HashMap::new(),
         }
     }
 }

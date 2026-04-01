@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use eframe::egui;
 use rfd::FileDialog;
 
 use crate::document::{
-    CharacterStyle, DocumentState, FontChoice, ListKind, ParagraphAlignment, ParagraphStyle,
+    CharacterStyle, DocumentImage, DocumentState, FontChoice, ListKind, ParagraphAlignment,
+    ParagraphStyle,
 };
 
 use super::CanvasState;
@@ -27,6 +28,7 @@ pub(super) fn open_document(
                 canvas.active_paragraph_style = ParagraphStyle::default();
                 canvas.zoom = 1.0;
                 canvas.pan = egui::Vec2::ZERO;
+                canvas.image_textures.clear();
                 *current_path = match path.extension().and_then(|ext| ext.to_str()) {
                     Some("docx") => None,
                     _ => Some(path.clone()),
@@ -73,6 +75,67 @@ pub(super) fn save_document(
         }
         Err(error) => *status_message = error,
     }
+}
+
+pub(super) fn insert_page_break(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+) {
+    let selected = canvas.selection.as_sorted_char_range();
+    let insert_at = selected.start;
+    if selected.start < selected.end {
+        document.delete_range(selected);
+    }
+
+    let cursor_index = document.insert_page_break(insert_at);
+    canvas.selection = egui::text_selection::CCursorRange::one(
+        egui::epaint::text::cursor::CCursor::new(cursor_index),
+    );
+    canvas.active_style = document.typing_style_at(cursor_index);
+    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+    *status_message = "Inserted page break".to_owned();
+}
+
+pub(super) fn insert_image(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+) {
+    let Some(path) = FileDialog::new()
+        .add_filter("images", &["png", "jpg", "jpeg", "gif", "bmp"])
+        .pick_file()
+    else {
+        return;
+    };
+
+    let image = match load_image_for_document(&path, document) {
+        Ok(image) => image,
+        Err(error) => {
+            *status_message = error;
+            return;
+        }
+    };
+
+    let selected = canvas.selection.as_sorted_char_range();
+    let insert_at = selected.start;
+    if selected.start < selected.end {
+        document.delete_range(selected);
+    }
+
+    let cursor_index = document.insert_image(insert_at, image);
+    canvas.selection = egui::text_selection::CCursorRange::one(
+        egui::epaint::text::cursor::CCursor::new(cursor_index),
+    );
+    canvas.active_style = document.typing_style_at(cursor_index);
+    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+    canvas.image_textures.clear();
+    *status_message = format!(
+        "Inserted {}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("image")
+    );
 }
 
 pub(super) fn handle_global_shortcuts(
@@ -193,6 +256,39 @@ fn apply_selection_or_active_style(
         document.apply_style_to_range(range, mutate);
     }
     mutate(&mut canvas.active_style);
+}
+
+fn load_image_for_document(
+    path: &PathBuf,
+    document: &DocumentState,
+) -> Result<DocumentImage, String> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let decoded = image::load_from_memory(&bytes)
+        .map_err(|error| format!("failed to decode {}: {error}", path.display()))?;
+    let width_points = (decoded.width() as f32 * 0.75).clamp(24.0, document.page_size.width_points);
+    let height_points =
+        (decoded.height() as f32 * 0.75).clamp(24.0, document.page_size.height_points);
+    let next_id = document
+        .paragraph_images
+        .iter()
+        .flatten()
+        .map(|image| image.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+
+    Ok(DocumentImage {
+        id: next_id,
+        bytes,
+        alt_text: path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Image")
+            .to_owned(),
+        width_points,
+        height_points,
+    })
 }
 
 fn apply_selection_or_current_paragraph(

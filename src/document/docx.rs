@@ -1,6 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{Cursor, Read},
+    path::Path,
 };
 
 use eframe::egui::Color32;
@@ -8,12 +9,14 @@ use quick_xml::{events::Event as XmlEvent, Reader};
 use zip::ZipArchive;
 
 use crate::document::{
-    CharacterStyle, ListKind, PageMargins, PageSize, ParagraphAlignment, ParagraphStyle, TextRun,
+    CharacterStyle, DocumentImage, ListKind, PageMargins, PageSize, ParagraphAlignment,
+    ParagraphStyle, TextRun, OBJECT_REPLACEMENT_CHAR,
 };
 
 pub(super) struct ImportedDocx {
     pub(super) runs: Vec<TextRun>,
     pub(super) paragraph_styles: Vec<ParagraphStyle>,
+    pub(super) paragraph_images: Vec<Option<DocumentImage>>,
     pub(super) page_size: Option<PageSize>,
     pub(super) margins: Option<PageMargins>,
 }
@@ -30,7 +33,9 @@ pub(super) fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
         .map_err(|error| format!("failed to read word/document.xml: {error}"))?;
 
     let numbering = load_numbering_definitions(&mut archive)?;
-    parse_document_xml(&document_xml, &numbering)
+    let relationships = load_document_relationships(&mut archive)?;
+    let media = load_media_store(&mut archive, &relationships)?;
+    parse_document_xml(&document_xml, &numbering, &relationships, &media)
 }
 
 fn load_numbering_definitions(
@@ -47,22 +52,61 @@ fn load_numbering_definitions(
     parse_numbering_xml(&numbering_xml)
 }
 
+fn load_document_relationships(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+) -> Result<DocumentRelationships, String> {
+    let Ok(mut relationships_file) = archive.by_name("word/_rels/document.xml.rels") else {
+        return Ok(DocumentRelationships::default());
+    };
+
+    let mut relationships_xml = String::new();
+    relationships_file
+        .read_to_string(&mut relationships_xml)
+        .map_err(|error| format!("failed to read word/_rels/document.xml.rels: {error}"))?;
+    parse_document_relationships(&relationships_xml)
+}
+
+fn load_media_store(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    relationships: &DocumentRelationships,
+) -> Result<HashMap<String, Vec<u8>>, String> {
+    let mut media = HashMap::new();
+
+    for target in HashSet::<String>::from_iter(relationships.image_targets.values().cloned()) {
+        let Ok(mut file) = archive.by_name(&target) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|error| format!("failed to read {target}: {error}"))?;
+        media.insert(target, bytes);
+    }
+
+    Ok(media)
+}
+
 fn parse_document_xml(
     document_xml: &str,
     numbering: &NumberingDefinitions,
+    relationships: &DocumentRelationships,
+    media: &HashMap<String, Vec<u8>>,
 ) -> Result<ImportedDocx, String> {
     let mut reader = Reader::from_str(document_xml);
     reader.config_mut().trim_text(false);
 
     let mut runs = Vec::new();
     let mut paragraph_styles = Vec::new();
+    let mut paragraph_images = Vec::new();
     let mut run_style = CharacterStyle::default();
     let mut paragraph_style = ParagraphStyle::default();
+    let mut current_paragraph_image = None;
     let mut in_text = false;
     let mut current_num_id = None;
     let mut current_ilvl = None;
+    let mut current_drawing = None::<DrawingState>;
     let mut page_size = None;
     let mut margins = None;
+    let mut next_image_id = 1usize;
 
     loop {
         match reader.read_event() {
@@ -72,6 +116,7 @@ fn parse_document_xml(
                         append_plain(&mut runs, "\n", CharacterStyle::default());
                     }
                     paragraph_style = ParagraphStyle::default();
+                    current_paragraph_image = None;
                     current_num_id = None;
                     current_ilvl = None;
                 }
@@ -116,6 +161,33 @@ fn parse_document_xml(
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),
                 b"pgSz" => page_size = parse_page_size(&event),
                 b"pgMar" => margins = parse_page_margins(&event),
+                b"drawing" | b"pict" => current_drawing = Some(DrawingState::default()),
+                b"docPr" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.alt_text = attr_value(&event, b"descr")
+                            .or_else(|| attr_value(&event, b"name"))
+                            .or_else(|| attr_value(&event, b"title"));
+                    }
+                }
+                b"extent" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.size_points = parse_emu_extent(&event);
+                    }
+                }
+                b"blip" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.rel_id = attr_value(&event, b"embed");
+                    }
+                }
+                b"imagedata" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.rel_id = attr_value(&event, b"id");
+                        drawing.alt_text = drawing
+                            .alt_text
+                            .clone()
+                            .or_else(|| attr_value(&event, b"title"));
+                    }
+                }
                 _ => {}
             },
             Ok(XmlEvent::Empty(event)) => match local_name(event.name().as_ref()) {
@@ -156,6 +228,32 @@ fn parse_document_xml(
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),
                 b"pgSz" => page_size = parse_page_size(&event),
                 b"pgMar" => margins = parse_page_margins(&event),
+                b"docPr" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.alt_text = attr_value(&event, b"descr")
+                            .or_else(|| attr_value(&event, b"name"))
+                            .or_else(|| attr_value(&event, b"title"));
+                    }
+                }
+                b"extent" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.size_points = parse_emu_extent(&event);
+                    }
+                }
+                b"blip" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.rel_id = attr_value(&event, b"embed");
+                    }
+                }
+                b"imagedata" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.rel_id = attr_value(&event, b"id");
+                        drawing.alt_text = drawing
+                            .alt_text
+                            .clone()
+                            .or_else(|| attr_value(&event, b"title"));
+                    }
+                }
                 _ => {}
             },
             Ok(XmlEvent::Text(text)) => {
@@ -168,10 +266,30 @@ fn parse_document_xml(
             }
             Ok(XmlEvent::End(event)) => match local_name(event.name().as_ref()) {
                 b"t" => in_text = false,
+                b"drawing" | b"pict" => {
+                    if current_paragraph_image.is_none() {
+                        if let Some(image) = resolve_drawing(
+                            current_drawing.take(),
+                            relationships,
+                            media,
+                            &mut next_image_id,
+                        ) {
+                            current_paragraph_image = Some(image);
+                            append_plain(
+                                &mut runs,
+                                &OBJECT_REPLACEMENT_CHAR.to_string(),
+                                CharacterStyle::default(),
+                            );
+                        }
+                    } else {
+                        current_drawing = None;
+                    }
+                }
                 b"p" => {
                     paragraph_style.list_kind =
                         numbering.lookup(current_num_id.as_deref(), current_ilvl.as_deref());
                     paragraph_styles.push(paragraph_style);
+                    paragraph_images.push(current_paragraph_image.clone());
                 }
                 _ => {}
             },
@@ -191,10 +309,14 @@ fn parse_document_xml(
     if paragraph_styles.is_empty() {
         paragraph_styles.push(ParagraphStyle::default());
     }
+    if paragraph_images.is_empty() {
+        paragraph_images.push(None);
+    }
 
     Ok(ImportedDocx {
         runs,
         paragraph_styles,
+        paragraph_images,
         page_size,
         margins,
     })
@@ -229,6 +351,18 @@ impl NumberingDefinitions {
             })
             .unwrap_or(ListKind::None)
     }
+}
+
+#[derive(Default)]
+struct DocumentRelationships {
+    image_targets: HashMap<String, String>,
+}
+
+#[derive(Default)]
+struct DrawingState {
+    rel_id: Option<String>,
+    alt_text: Option<String>,
+    size_points: Option<(f32, f32)>,
 }
 
 fn parse_numbering_xml(numbering_xml: &str) -> Result<NumberingDefinitions, String> {
@@ -309,6 +443,89 @@ fn parse_numbering_xml(numbering_xml: &str) -> Result<NumberingDefinitions, Stri
     }
 
     Ok(numbering)
+}
+
+fn parse_document_relationships(relationships_xml: &str) -> Result<DocumentRelationships, String> {
+    let mut reader = Reader::from_str(relationships_xml);
+    reader.config_mut().trim_text(false);
+
+    let mut relationships = DocumentRelationships::default();
+
+    loop {
+        match reader.read_event() {
+            Ok(XmlEvent::Start(event)) | Ok(XmlEvent::Empty(event)) => {
+                if local_name(event.name().as_ref()) != b"Relationship" {
+                    continue;
+                }
+
+                let Some(rel_type) = attr_value(&event, b"Type") else {
+                    continue;
+                };
+                if !rel_type.contains("/image") {
+                    continue;
+                }
+
+                let (Some(id), Some(target)) =
+                    (attr_value(&event, b"Id"), attr_value(&event, b"Target"))
+                else {
+                    continue;
+                };
+                relationships
+                    .image_targets
+                    .insert(id, normalize_relationship_target(&target));
+            }
+            Ok(XmlEvent::Eof) => break,
+            Err(error) => {
+                return Err(format!(
+                    "failed to parse word/_rels/document.xml.rels: {error}"
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(relationships)
+}
+
+fn normalize_relationship_target(target: &str) -> String {
+    if target.starts_with('/') {
+        target.trim_start_matches('/').to_owned()
+    } else if target.starts_with("word/") {
+        target.to_owned()
+    } else {
+        format!("word/{target}")
+    }
+}
+
+fn resolve_drawing(
+    drawing: Option<DrawingState>,
+    relationships: &DocumentRelationships,
+    media: &HashMap<String, Vec<u8>>,
+    next_image_id: &mut usize,
+) -> Option<DocumentImage> {
+    let drawing = drawing?;
+    let rel_id = drawing.rel_id?;
+    let target = relationships.image_targets.get(&rel_id)?;
+    let bytes = media.get(target)?.clone();
+
+    let (width_points, height_points) = drawing.size_points.unwrap_or((240.0, 180.0));
+    let alt_text = drawing.alt_text.unwrap_or_else(|| {
+        Path::new(target)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Image")
+            .to_owned()
+    });
+
+    let image = DocumentImage {
+        id: *next_image_id,
+        bytes,
+        alt_text,
+        width_points,
+        height_points,
+    };
+    *next_image_id += 1;
+    Some(image)
 }
 
 fn append_plain(runs: &mut Vec<TextRun>, text: &str, style: CharacterStyle) {
@@ -411,14 +628,26 @@ fn parse_page_margins(event: &quick_xml::events::BytesStart<'_>) -> Option<PageM
     })
 }
 
+fn parse_emu_extent(event: &quick_xml::events::BytesStart<'_>) -> Option<(f32, f32)> {
+    let width = attr_value(event, b"cx")?.parse::<f32>().ok()?;
+    let height = attr_value(event, b"cy")?.parse::<f32>().ok()?;
+    Some((emu_to_points(width), emu_to_points(height)))
+}
+
 fn twips_to_points(value: f32) -> f32 {
     value / 20.0
 }
 
+fn emu_to_points(value: f32) -> f32 {
+    value / 12_700.0
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_document_xml, parse_numbering_xml};
-    use crate::document::{ListKind, ParagraphAlignment};
+    use std::collections::HashMap;
+
+    use super::{parse_document_relationships, parse_document_xml, parse_numbering_xml};
+    use crate::document::{ListKind, ParagraphAlignment, OBJECT_REPLACEMENT_CHAR};
 
     #[test]
     fn parses_lists_alignment_and_page_settings_from_docx_xml() {
@@ -477,22 +706,86 @@ mod tests {
             </w:document>
             "#,
             &numbering,
+            &Default::default(),
+            &HashMap::new(),
         )
         .unwrap();
 
         assert_eq!(imported.runs.len(), 1);
         assert_eq!(imported.runs[0].text, "First\nSecond");
         assert_eq!(imported.paragraph_styles.len(), 2);
+        assert_eq!(imported.paragraph_images, vec![None, None]);
         assert_eq!(
             imported.paragraph_styles[0],
             crate::document::ParagraphStyle {
                 alignment: ParagraphAlignment::Center,
                 list_kind: ListKind::Ordered,
+                page_break_before: false,
             }
         );
         assert_eq!(imported.paragraph_styles[1].list_kind, ListKind::Bullet);
         assert_eq!(imported.page_size.unwrap().width_points, 612.0);
         assert_eq!(imported.margins.unwrap().left_points, 90.0);
+    }
+
+    #[test]
+    fn imports_image_paragraphs_from_docx_xml() {
+        let numbering = parse_numbering_xml(
+            r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#,
+        )
+        .unwrap();
+        let relationships = parse_document_relationships(
+            r#"
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship
+                Id="rId5"
+                Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+                Target="media/image1.png"
+              />
+            </Relationships>
+            "#,
+        )
+        .unwrap();
+
+        let imported = parse_document_xml(
+            r#"
+            <w:document
+              xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+              xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+              xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+              xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <w:body>
+                <w:p>
+                  <w:r>
+                    <w:drawing>
+                      <wp:inline>
+                        <wp:extent cx="914400" cy="457200"/>
+                        <wp:docPr name="Logo" descr="Logo"/>
+                        <a:graphic>
+                          <a:graphicData>
+                            <a:blip r:embed="rId5"/>
+                          </a:graphicData>
+                        </a:graphic>
+                      </wp:inline>
+                    </w:drawing>
+                  </w:r>
+                </w:p>
+              </w:body>
+            </w:document>
+            "#,
+            &numbering,
+            &relationships,
+            &HashMap::from([(String::from("word/media/image1.png"), vec![1, 2, 3, 4])]),
+        )
+        .unwrap();
+
+        assert_eq!(imported.runs[0].text, OBJECT_REPLACEMENT_CHAR.to_string());
+        assert_eq!(imported.paragraph_images.len(), 1);
+        let image = imported.paragraph_images[0].as_ref().unwrap();
+        assert_eq!(image.alt_text, "Logo");
+        assert_eq!(image.width_points, 72.0);
+        assert_eq!(image.height_points, 36.0);
+        assert_eq!(image.bytes, vec![1, 2, 3, 4]);
     }
 
     #[test]
@@ -513,6 +806,8 @@ mod tests {
             </w:document>
             "#,
             &numbering,
+            &Default::default(),
+            &HashMap::new(),
         )
         .unwrap();
 

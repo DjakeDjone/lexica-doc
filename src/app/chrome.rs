@@ -2,14 +2,16 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::document::{DocumentState, FontChoice, ListKind, ParagraphAlignment};
+use crate::document::{
+    DocumentState, FontChoice, ListKind, ParagraphAlignment, OBJECT_REPLACEMENT_CHAR,
+};
 
 use super::{
     actions::{
-        open_document, save_document, set_font_choice, set_font_size, set_highlight_color,
-        set_paragraph_alignment, set_text_color, sync_active_style, toggle_bold,
-        toggle_bullet_list, toggle_italic, toggle_ordered_list, toggle_strikethrough,
-        toggle_underline,
+        insert_image, insert_page_break, open_document, save_document, set_font_choice,
+        set_font_size, set_highlight_color, set_paragraph_alignment, set_text_color,
+        sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
+        toggle_strikethrough, toggle_underline,
     },
     palette::{theme_switch, ThemeMode, ThemePalette},
     CanvasState,
@@ -167,10 +169,11 @@ pub(super) fn paint_ribbon(
                 }
                 RibbonTab::Insert => {
                     ribbon_file_group(ui, document, canvas, status_message, current_path, palette);
+                    ribbon_insert_group(ui, document, canvas, status_message, palette);
                     ribbon_info_group(
                         ui,
                         "Insert",
-                        "Import supports .txt, .md, .markdown, and .docx.",
+                        "Import supports .txt, .md, .markdown, and .docx with images.",
                         palette,
                     );
                 }
@@ -214,7 +217,11 @@ pub(super) fn paint_status_bar(
     palette: ThemePalette,
 ) {
     ui.horizontal(|ui| {
-        let plain_text = document.plain_text();
+        let plain_text: String = document
+            .plain_text()
+            .chars()
+            .filter(|ch| *ch != OBJECT_REPLACEMENT_CHAR)
+            .collect();
         let word_count = plain_text.split_whitespace().count();
         ui.label(
             egui::RichText::new("Page 1")
@@ -308,6 +315,23 @@ fn ribbon_font_group(
         }
         if format_button(ui, canvas.active_style.strikethrough, "S", palette).clicked() {
             toggle_strikethrough(document, canvas);
+        }
+    });
+}
+
+fn ribbon_insert_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Insert", palette, |ui| {
+        if ui.button("Image").clicked() {
+            insert_image(document, canvas, status_message);
+        }
+        if ui.button("Page Break").clicked() {
+            insert_page_break(document, canvas, status_message);
         }
     });
 }
