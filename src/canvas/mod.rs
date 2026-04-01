@@ -232,7 +232,11 @@ fn layout_document(
             }
         }
 
-        let marker_style = paragraph.runs.first().map(|run| run.style).unwrap_or(default_style);
+        let marker_style = paragraph
+            .runs
+            .first()
+            .map(|run| run.style)
+            .unwrap_or(default_style);
         let mut paragraph_galley = painter.layout_job(job);
         align_paragraph_galley(
             &mut paragraph_galley,
@@ -292,7 +296,10 @@ fn align_paragraph_galley(
         })
         .collect();
 
-    if target_offsets.iter().all(|delta| delta.abs() <= f32::EPSILON) {
+    if target_offsets
+        .iter()
+        .all(|delta| delta.abs() <= f32::EPSILON)
+    {
         return;
     }
 

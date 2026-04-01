@@ -9,7 +9,7 @@ use eframe::egui::{
     Color32, FontFamily, FontId, Stroke,
 };
 
-use docx::docx_to_runs;
+use docx::docx_to_document;
 use markdown::{
     markdown_cursor_index_in_line, markdown_heading_prefix, markdown_line_replacement,
     markdown_to_runs,
@@ -450,10 +450,26 @@ impl DocumentState {
             .to_ascii_lowercase();
 
         let runs = match extension.as_str() {
-            "docx" => docx_to_runs(
-                &fs::read(path)
-                    .map_err(|error| format!("failed to read {}: {error}", path.display()))?,
-            )?,
+            "docx" => {
+                let imported = docx_to_document(
+                    &fs::read(path)
+                        .map_err(|error| format!("failed to read {}: {error}", path.display()))?,
+                )?;
+
+                let mut document = Self::bootstrap();
+                document.title = title;
+                document.runs = imported.runs;
+                document.paragraph_styles = imported.paragraph_styles;
+                if let Some(page_size) = imported.page_size {
+                    document.page_size = page_size;
+                }
+                if let Some(margins) = imported.margins {
+                    document.margins = margins;
+                }
+                document.normalize_runs();
+                document.ensure_paragraph_style_count();
+                return Ok(document);
+            }
             "md" | "markdown" => {
                 let source = fs::read_to_string(path)
                     .map_err(|error| format!("failed to read {}: {error}", path.display()))?;

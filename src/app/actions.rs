@@ -160,7 +160,9 @@ pub(super) fn set_paragraph_alignment(
     canvas: &mut CanvasState,
     alignment: ParagraphAlignment,
 ) {
-    apply_selection_or_current_paragraph(document, canvas, move |style| style.alignment = alignment);
+    apply_selection_or_current_paragraph(document, canvas, move |style| {
+        style.alignment = alignment
+    });
 }
 
 pub(super) fn toggle_bullet_list(document: &mut DocumentState, canvas: &mut CanvasState) {
