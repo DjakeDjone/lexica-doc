@@ -46,7 +46,27 @@ pub(super) fn handle_pointer_interaction(
         };
         let cursor = galley.cursor_from_pos(local_pos);
 
-        if response.drag_started() {
+        let handled_multi_click = if response.triple_clicked() {
+            canvas.selection =
+                selection_range_from_char_range(document.line_range_at(cursor.index));
+            canvas.selection.h_pos = None;
+            canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
+            canvas.active_paragraph_style =
+                document.paragraph_style_at(canvas.selection.primary.index);
+            canvas.last_interaction_time = ui.input(|i| i.time);
+            true
+        } else if response.double_clicked() {
+            let range = document
+                .word_range_at(cursor.index)
+                .unwrap_or_else(|| document.line_range_at(cursor.index));
+            canvas.selection = selection_range_from_char_range(range);
+            canvas.selection.h_pos = None;
+            canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
+            canvas.active_paragraph_style =
+                document.paragraph_style_at(canvas.selection.primary.index);
+            canvas.last_interaction_time = ui.input(|i| i.time);
+            true
+        } else if response.drag_started() {
             let extend = ui.input(|i| i.modifiers.shift);
             if extend {
                 canvas.selection.primary = cursor;
@@ -55,7 +75,10 @@ pub(super) fn handle_pointer_interaction(
             }
             canvas.selection.h_pos = None;
             canvas.last_interaction_time = ui.input(|i| i.time);
-        }
+            false
+        } else {
+            false
+        };
 
         if response.dragged() {
             canvas.selection.primary = cursor;
@@ -64,7 +87,7 @@ pub(super) fn handle_pointer_interaction(
             canvas.active_paragraph_style =
                 document.paragraph_style_at(canvas.selection.primary.index);
             canvas.last_interaction_time = ui.input(|i| i.time);
-        } else if response.clicked() {
+        } else if response.clicked() && !handled_multi_click {
             if ui.input(|i| i.modifiers.shift) {
                 canvas.selection.primary = cursor;
             } else {
@@ -77,6 +100,10 @@ pub(super) fn handle_pointer_interaction(
             canvas.last_interaction_time = ui.input(|i| i.time);
         }
     }
+}
+
+fn selection_range_from_char_range(range: std::ops::Range<usize>) -> CCursorRange {
+    CCursorRange::two(CCursor::new(range.start), CCursor::new(range.end))
 }
 
 pub(super) fn handle_keyboard_input(

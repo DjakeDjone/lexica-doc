@@ -14,7 +14,7 @@ use markdown::{
     markdown_cursor_index_in_line, markdown_heading_prefix, markdown_line_replacement,
     markdown_to_runs,
 };
-use text::{char_to_byte_index, line_char_range, slice_char_range};
+use text::{char_to_byte_index, line_char_range, slice_char_range, word_char_range};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FontChoice {
@@ -226,6 +226,10 @@ impl DocumentState {
 
     pub fn line_range_at(&self, char_index: usize) -> Range<usize> {
         line_char_range(&self.plain_text(), char_index.min(self.total_chars()))
+    }
+
+    pub fn word_range_at(&self, char_index: usize) -> Option<Range<usize>> {
+        word_char_range(&self.plain_text(), char_index.min(self.total_chars()))
     }
 
     pub fn typing_style_at(&self, char_index: usize) -> CharacterStyle {
@@ -663,7 +667,8 @@ impl DocumentState {
 
     fn ensure_paragraph_style_count(&mut self) {
         let target = self.paragraph_count().max(1);
-        self.paragraph_styles.resize(target, ParagraphStyle::default());
+        self.paragraph_styles
+            .resize(target, ParagraphStyle::default());
     }
 
     fn to_plain_text_export(&self) -> String {

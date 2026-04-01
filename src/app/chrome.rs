@@ -320,16 +320,10 @@ fn ribbon_paragraph_group(
 ) {
     ribbon_group(ui, "Paragraph", palette, |ui| {
         for alignment in ParagraphAlignment::ALL {
-            let label = match alignment {
-                ParagraphAlignment::Left => "L",
-                ParagraphAlignment::Center => "C",
-                ParagraphAlignment::Right => "R",
-                ParagraphAlignment::Justify => "J",
-            };
-            if format_button(
+            if alignment_button(
                 ui,
                 canvas.active_paragraph_style.alignment == alignment,
-                label,
+                alignment,
                 palette,
             )
             .on_hover_text(alignment.label())
@@ -475,6 +469,16 @@ fn format_button(
     label: &str,
     palette: ThemePalette,
 ) -> egui::Response {
+    let fill = if active {
+        palette.accent.gamma_multiply(0.22)
+    } else {
+        palette.ribbon_group_bg
+    };
+    let stroke = if active {
+        egui::Stroke::new(1.0, palette.accent)
+    } else {
+        egui::Stroke::new(1.0, palette.border)
+    };
     ui.add(
         egui::Button::new(egui::RichText::new(label).strong().color(if active {
             palette.tab_active_fg
@@ -482,12 +486,69 @@ fn format_button(
             palette.text_primary
         }))
         .min_size(egui::vec2(24.0, 24.0))
-        .fill(if active {
-            palette.tab_active_bg
-        } else {
-            palette.ribbon_group_bg
-        })
-        .stroke(egui::Stroke::new(1.0, palette.border))
+        .fill(fill)
+        .stroke(stroke)
         .corner_radius(3.0),
     )
+}
+
+fn alignment_button(
+    ui: &mut egui::Ui,
+    active: bool,
+    alignment: ParagraphAlignment,
+    palette: ThemePalette,
+) -> egui::Response {
+    let fill = if active {
+        palette.accent.gamma_multiply(0.22)
+    } else {
+        palette.ribbon_group_bg
+    };
+    let stroke = if active {
+        egui::Stroke::new(1.0, palette.accent)
+    } else {
+        egui::Stroke::new(1.0, palette.border)
+    };
+    let response = ui.add(
+        egui::Button::new("")
+            .min_size(egui::vec2(24.0, 24.0))
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(3.0),
+    );
+
+    let stroke = egui::Stroke::new(
+        1.6,
+        if active {
+            palette.tab_active_fg
+        } else {
+            palette.text_primary
+        },
+    );
+    let rect = response.rect.shrink2(egui::vec2(5.0, 5.0));
+    let line_gap = rect.height() / 3.0;
+    let line_y = [
+        rect.top(),
+        rect.top() + line_gap,
+        rect.top() + line_gap * 2.0,
+        rect.bottom(),
+    ];
+
+    for (index, y) in line_y.into_iter().enumerate() {
+        let width_factor = match alignment {
+            ParagraphAlignment::Left => [1.0, 0.78, 0.92, 0.64][index],
+            ParagraphAlignment::Center => [0.72, 1.0, 0.84, 0.6][index],
+            ParagraphAlignment::Right => [0.7, 1.0, 0.82, 0.62][index],
+            ParagraphAlignment::Justify => 1.0,
+        };
+        let line_width = rect.width() * width_factor;
+        let x = match alignment {
+            ParagraphAlignment::Left | ParagraphAlignment::Justify => rect.left(),
+            ParagraphAlignment::Center => rect.center().x - line_width * 0.5,
+            ParagraphAlignment::Right => rect.right() - line_width,
+        };
+        ui.painter()
+            .line_segment([egui::pos2(x, y), egui::pos2(x + line_width, y)], stroke);
+    }
+
+    response
 }
