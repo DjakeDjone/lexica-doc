@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use eframe::egui;
 use rfd::FileDialog;
 
-use crate::document::{CharacterStyle, DocumentState, FontChoice};
+use crate::document::{
+    CharacterStyle, DocumentState, FontChoice, ListKind, ParagraphAlignment, ParagraphStyle,
+};
 
 use super::CanvasState;
 
@@ -22,6 +24,7 @@ pub(super) fn open_document(
                 *document = new_document;
                 canvas.selection = egui::text_selection::CCursorRange::default();
                 canvas.active_style = CharacterStyle::default();
+                canvas.active_paragraph_style = ParagraphStyle::default();
                 canvas.zoom = 1.0;
                 canvas.pan = egui::Vec2::ZERO;
                 *current_path = match path.extension().and_then(|ext| ext.to_str()) {
@@ -149,6 +152,33 @@ pub(super) fn sync_active_style(document: &DocumentState, canvas: &mut CanvasSta
         canvas.selection.primary.index
     };
     canvas.active_style = document.typing_style_at(cursor_index);
+    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+}
+
+pub(super) fn set_paragraph_alignment(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    alignment: ParagraphAlignment,
+) {
+    apply_selection_or_current_paragraph(document, canvas, move |style| style.alignment = alignment);
+}
+
+pub(super) fn toggle_bullet_list(document: &mut DocumentState, canvas: &mut CanvasState) {
+    let next = if canvas.active_paragraph_style.list_kind == ListKind::Bullet {
+        ListKind::None
+    } else {
+        ListKind::Bullet
+    };
+    apply_selection_or_current_paragraph(document, canvas, move |style| style.list_kind = next);
+}
+
+pub(super) fn toggle_ordered_list(document: &mut DocumentState, canvas: &mut CanvasState) {
+    let next = if canvas.active_paragraph_style.list_kind == ListKind::Ordered {
+        ListKind::None
+    } else {
+        ListKind::Ordered
+    };
+    apply_selection_or_current_paragraph(document, canvas, move |style| style.list_kind = next);
 }
 
 fn apply_selection_or_active_style(
@@ -161,4 +191,14 @@ fn apply_selection_or_active_style(
         document.apply_style_to_range(range, mutate);
     }
     mutate(&mut canvas.active_style);
+}
+
+fn apply_selection_or_current_paragraph(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    mutate: impl Fn(&mut ParagraphStyle) + Copy,
+) {
+    let range = canvas.selection.as_sorted_char_range();
+    document.apply_paragraph_style_to_range(range, mutate);
+    canvas.active_paragraph_style = document.paragraph_style_at(canvas.selection.primary.index);
 }

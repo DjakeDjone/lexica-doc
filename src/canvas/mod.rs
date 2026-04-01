@@ -8,12 +8,12 @@ use eframe::egui::{
     self,
     epaint::CornerRadius,
     text_selection::visuals::{paint_text_cursor, paint_text_selection},
-    Color32, FontFamily, FontId, Id, Rect, Sense, Stroke, StrokeKind,
+    Align2, Color32, FontFamily, FontId, Id, Rect, Sense, Stroke, StrokeKind,
 };
 
 use crate::{
     app::{CanvasState, ThemeMode},
-    document::DocumentState,
+    document::{text_format, CharacterStyle, DocumentState, ParagraphAlignment},
     layout::{
         centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
         page_content_rect,
@@ -23,6 +23,19 @@ use crate::{
 use editor_input::{apply_viewport_input, handle_keyboard_input, handle_pointer_interaction};
 use page_layout::layout_page_stack;
 use palette::canvas_palette;
+
+struct DocumentLayout {
+    galley: Arc<egui::Galley>,
+    list_markers: Vec<ListMarkerLayout>,
+}
+
+struct ListMarkerLayout {
+    row_index: usize,
+    text: String,
+    x: f32,
+    font_id: FontId,
+    color: Color32,
+}
 
 pub fn paint_document_canvas(
     ui: &mut egui::Ui,
@@ -43,18 +56,30 @@ pub fn paint_document_canvas(
     let base_page_rect =
         centered_page_rect(viewport, document.page_size, canvas.zoom, egui::Vec2::ZERO);
     let content_size = page_content_rect(base_page_rect, document.margins, canvas.zoom).size();
-    let mut galley = layout_document(ui, document, canvas, content_size.x);
-    let page_layout = layout_page_stack(viewport, document, canvas, &galley);
+    let mut document_layout = layout_document(ui, document, canvas, content_size.x);
+    let page_layout = layout_page_stack(viewport, document, canvas, &document_layout.galley);
 
-    handle_pointer_interaction(ui, &response, &page_layout, &galley, canvas, document);
+    handle_pointer_interaction(
+        ui,
+        &response,
+        &page_layout,
+        &document_layout.galley,
+        canvas,
+        document,
+    );
 
     let has_focus = ui.memory(|mem| mem.has_focus(editor_id));
-    if has_focus && handle_keyboard_input(ui, document, canvas, &galley) {
-        galley = layout_document(ui, document, canvas, content_size.x);
+    if has_focus && handle_keyboard_input(ui, document, canvas, &document_layout.galley) {
+        document_layout = layout_document(ui, document, canvas, content_size.x);
     }
 
     if has_focus && !canvas.selection.is_empty() {
-        paint_text_selection(&mut galley, ui.visuals(), &canvas.selection, None);
+        paint_text_selection(
+            &mut document_layout.galley,
+            ui.visuals(),
+            &canvas.selection,
+            None,
+        );
     }
 
     for page in &page_layout.pages {
@@ -85,13 +110,38 @@ pub fn paint_document_canvas(
         let galley_origin = page.content_rect.min - egui::vec2(0.0, page.start_y);
         painter.with_clip_rect(page.content_rect).galley(
             galley_origin,
-            galley.clone(),
+            document_layout.galley.clone(),
             Color32::BLACK,
         );
+
+        let clipped_painter = painter.with_clip_rect(page.content_rect);
+        for marker in &document_layout.list_markers {
+            let Some(row) = document_layout.galley.rows.get(marker.row_index) else {
+                continue;
+            };
+            let marker_y = row.pos.y;
+            if marker_y < page.start_y || marker_y > page.end_y {
+                continue;
+            }
+
+            let marker_pos = egui::pos2(
+                page.content_rect.left() + marker.x,
+                page.content_rect.top() + marker_y - page.start_y,
+            );
+            clipped_painter.text(
+                marker_pos,
+                Align2::RIGHT_TOP,
+                &marker.text,
+                marker.font_id.clone(),
+                marker.color,
+            );
+        }
     }
 
     if has_focus {
-        if let Some(caret_rect) = page_layout.caret_rect(&galley, canvas.selection.primary) {
+        if let Some(caret_rect) =
+            page_layout.caret_rect(&document_layout.galley, canvas.selection.primary)
+        {
             paint_text_cursor(
                 ui,
                 &painter,
@@ -151,7 +201,116 @@ fn layout_document(
     document: &DocumentState,
     canvas: &CanvasState,
     wrap_width: f32,
-) -> Arc<egui::Galley> {
-    ui.painter()
-        .layout_job(document.layout_job(canvas.zoom, wrap_width))
+) -> DocumentLayout {
+    let marker_gutter = document_points_to_screen_points(24.0, canvas.zoom);
+    let marker_gap = document_points_to_screen_points(6.0, canvas.zoom);
+    let default_style = CharacterStyle::default();
+    let painter = ui.painter();
+
+    let mut paragraph_galleys = Vec::new();
+    let mut list_markers = Vec::new();
+    let mut row_index = 0usize;
+
+    for paragraph in document.paragraphs() {
+        let indent = if paragraph.list_marker.is_some() {
+            marker_gutter
+        } else {
+            0.0
+        };
+        let paragraph_wrap_width = (wrap_width - indent).max(1.0);
+        let mut job = egui::epaint::text::LayoutJob::default();
+        job.wrap.max_width = paragraph_wrap_width;
+        job.break_on_newline = true;
+        job.halign = egui::Align::LEFT;
+        job.justify = paragraph.style.alignment == ParagraphAlignment::Justify;
+
+        if paragraph.runs.is_empty() {
+            job.append("", 0.0, text_format(default_style, canvas.zoom));
+        } else {
+            for run in &paragraph.runs {
+                job.append(&run.text, 0.0, text_format(run.style, canvas.zoom));
+            }
+        }
+
+        let marker_style = paragraph.runs.first().map(|run| run.style).unwrap_or(default_style);
+        let mut paragraph_galley = painter.layout_job(job);
+        align_paragraph_galley(
+            &mut paragraph_galley,
+            indent,
+            paragraph_wrap_width,
+            paragraph.style.alignment,
+        );
+
+        if let Some(marker_text) = paragraph.list_marker {
+            list_markers.push(ListMarkerLayout {
+                row_index,
+                text: marker_text,
+                x: indent - marker_gap,
+                font_id: text_format(marker_style, canvas.zoom).font_id,
+                color: marker_style.text_color,
+            });
+        }
+
+        row_index += paragraph_galley.rows.len();
+        paragraph_galleys.push(paragraph_galley);
+    }
+
+    let plain_text = document.plain_text();
+    let mut merged_job = egui::epaint::text::LayoutJob::default();
+    merged_job.wrap.max_width = wrap_width;
+    merged_job.break_on_newline = true;
+    merged_job.append(&plain_text, 0.0, text_format(default_style, canvas.zoom));
+
+    DocumentLayout {
+        galley: Arc::new(egui::Galley::concat(
+            Arc::new(merged_job),
+            &paragraph_galleys,
+            painter.pixels_per_point(),
+        )),
+        list_markers,
+    }
+}
+
+fn align_paragraph_galley(
+    galley: &mut Arc<egui::Galley>,
+    indent: f32,
+    wrap_width: f32,
+    alignment: ParagraphAlignment,
+) {
+    let target_offsets: Vec<f32> = galley
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let base_offset = match alignment {
+                ParagraphAlignment::Left | ParagraphAlignment::Justify => 0.0,
+                ParagraphAlignment::Center => ((wrap_width - row.size.x) * 0.5).max(0.0),
+                ParagraphAlignment::Right => (wrap_width - row.size.x).max(0.0),
+            };
+            let current_x = galley.rows[index].pos.x;
+            indent + base_offset - current_x
+        })
+        .collect();
+
+    if target_offsets.iter().all(|delta| delta.abs() <= f32::EPSILON) {
+        return;
+    }
+
+    let galley = Arc::make_mut(galley);
+    let mut min_rect = galley.rect.min;
+    let mut max_rect = galley.rect.max;
+    let mut mesh_bounds = egui::Rect::NOTHING;
+
+    for (row, delta) in galley.rows.iter_mut().zip(target_offsets) {
+        row.pos.x += delta;
+        let row_rect = row.rect();
+        min_rect.x = min_rect.x.min(row_rect.min.x);
+        min_rect.y = min_rect.y.min(row_rect.min.y);
+        max_rect.x = max_rect.x.max(row_rect.max.x);
+        max_rect.y = max_rect.y.max(row_rect.max.y);
+        mesh_bounds |= row.visuals.mesh_bounds.translate(row.pos.to_vec2());
+    }
+
+    galley.rect = egui::Rect::from_min_max(min_rect, max_rect);
+    galley.mesh_bounds = mesh_bounds;
 }

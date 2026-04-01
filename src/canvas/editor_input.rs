@@ -61,6 +61,8 @@ pub(super) fn handle_pointer_interaction(
             canvas.selection.primary = cursor;
             canvas.selection.h_pos = None;
             canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
+            canvas.active_paragraph_style =
+                document.paragraph_style_at(canvas.selection.primary.index);
             canvas.last_interaction_time = ui.input(|i| i.time);
         } else if response.clicked() {
             if ui.input(|i| i.modifiers.shift) {
@@ -70,6 +72,8 @@ pub(super) fn handle_pointer_interaction(
             }
             canvas.selection.h_pos = None;
             canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
+            canvas.active_paragraph_style =
+                document.paragraph_style_at(canvas.selection.primary.index);
             canvas.last_interaction_time = ui.input(|i| i.time);
         }
     }
@@ -148,6 +152,8 @@ pub(super) fn handle_keyboard_input(
                         if canvas.selection.on_key_press(os, galley, &modifiers, key) {
                             canvas.active_style =
                                 document.typing_style_at(canvas.selection.primary.index);
+                            canvas.active_paragraph_style =
+                                document.paragraph_style_at(canvas.selection.primary.index);
                             canvas.last_interaction_time = ui.input(|i| i.time);
                         }
                     }
@@ -160,6 +166,7 @@ pub(super) fn handle_keyboard_input(
 
     if changed {
         canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
+        canvas.active_paragraph_style = document.paragraph_style_at(canvas.selection.primary.index);
         canvas.last_interaction_time = ui.input(|i| i.time);
     }
 
@@ -224,6 +231,7 @@ fn replace_selection_or_insert(document: &mut DocumentState, canvas: &mut Canvas
             .saturating_add(1);
         canvas.selection = CCursorRange::one(CCursor::new(new_line_start));
         canvas.active_style = document.typing_style_at(new_line_start);
+        canvas.active_paragraph_style = document.paragraph_style_at(new_line_start);
         return;
     }
 
@@ -232,6 +240,7 @@ fn replace_selection_or_insert(document: &mut DocumentState, canvas: &mut Canvas
     let cursor_index = transformed_next_index.min(line_end);
     canvas.selection = CCursorRange::one(CCursor::new(cursor_index));
     canvas.active_style = document.typing_style_at(cursor_index);
+    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
 }
 
 fn delete_backward(document: &mut DocumentState, canvas: &mut CanvasState) -> bool {

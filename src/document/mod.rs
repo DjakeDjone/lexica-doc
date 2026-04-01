@@ -5,7 +5,7 @@ mod text;
 use std::{fs, ops::Range, path::Path};
 
 use eframe::egui::{
-    epaint::text::{LayoutJob, TextFormat, VariationCoords},
+    epaint::text::{TextFormat, VariationCoords},
     Color32, FontFamily, FontId, Stroke,
 };
 
@@ -40,6 +40,44 @@ impl FontChoice {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParagraphAlignment {
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+impl ParagraphAlignment {
+    pub const ALL: [Self; 4] = [Self::Left, Self::Center, Self::Right, Self::Justify];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Center => "Center",
+            Self::Right => "Right",
+            Self::Justify => "Justify",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListKind {
+    None,
+    Bullet,
+    Ordered,
+}
+
+impl ListKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Bullet => "Bullets",
+            Self::Ordered => "Numbering",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CharacterStyle {
     pub bold: bool,
@@ -67,10 +105,34 @@ impl Default for CharacterStyle {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParagraphStyle {
+    pub alignment: ParagraphAlignment,
+    pub list_kind: ListKind,
+}
+
+impl Default for ParagraphStyle {
+    fn default() -> Self {
+        Self {
+            alignment: ParagraphAlignment::Left,
+            list_kind: ListKind::None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextRun {
     pub text: String,
     pub style: CharacterStyle,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Paragraph {
+    pub index: usize,
+    pub range: Range<usize>,
+    pub style: ParagraphStyle,
+    pub runs: Vec<TextRun>,
+    pub list_marker: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -90,6 +152,7 @@ pub struct PageMargins {
 pub struct DocumentState {
     pub title: String,
     pub runs: Vec<TextRun>,
+    pub paragraph_styles: Vec<ParagraphStyle>,
     pub page_size: PageSize,
     pub margins: PageMargins,
 }
@@ -126,6 +189,7 @@ impl DocumentState {
                     style: CharacterStyle::default(),
                 },
             ],
+            paragraph_styles: vec![ParagraphStyle::default(); 3],
             page_size: PageSize::a4(),
             margins: PageMargins::standard(),
         }
@@ -137,6 +201,10 @@ impl DocumentState {
 
     pub fn total_chars(&self) -> usize {
         self.runs.iter().map(|run| run.text.chars().count()).sum()
+    }
+
+    pub fn paragraph_count(&self) -> usize {
+        self.plain_text().chars().filter(|ch| *ch == '\n').count() + 1
     }
 
     pub fn style_at(&self, char_index: usize) -> CharacterStyle {
@@ -176,6 +244,14 @@ impl DocumentState {
         self.style_at(cursor_index)
     }
 
+    pub fn paragraph_style_at(&self, char_index: usize) -> ParagraphStyle {
+        let paragraph_index = self.paragraph_index_at(char_index);
+        self.paragraph_styles
+            .get(paragraph_index)
+            .copied()
+            .unwrap_or_default()
+    }
+
     pub fn apply_markdown_shortcuts_at(&mut self, char_index: usize) -> usize {
         let cursor_index = char_index.min(self.total_chars());
         let line_range = self.line_range_at(cursor_index);
@@ -202,6 +278,20 @@ impl DocumentState {
         }
 
         let insertion_index = char_index.min(self.total_chars());
+        let inserted_paragraphs = text.chars().filter(|ch| *ch == '\n').count();
+        if inserted_paragraphs > 0 {
+            let paragraph_index = self.paragraph_index_at(insertion_index);
+            let paragraph_style = self
+                .paragraph_styles
+                .get(paragraph_index)
+                .copied()
+                .unwrap_or_default();
+            for offset in 0..inserted_paragraphs {
+                self.paragraph_styles
+                    .insert(paragraph_index + offset + 1, paragraph_style);
+            }
+        }
+
         self.split_at_char(insertion_index);
 
         let mut offset = 0;
@@ -222,6 +312,7 @@ impl DocumentState {
             },
         );
         self.normalize_runs();
+        self.ensure_paragraph_style_count();
     }
 
     pub fn replace_range_with_runs(&mut self, range: Range<usize>, runs: Vec<TextRun>) {
@@ -247,6 +338,18 @@ impl DocumentState {
 
         let start = range.start.min(self.total_chars());
         let end = range.end.min(self.total_chars());
+        let paragraph_index = self.paragraph_index_at(start);
+        let removed_paragraphs = self
+            .selected_text(start..end)
+            .chars()
+            .filter(|ch| *ch == '\n')
+            .count();
+        if removed_paragraphs > 0 {
+            let drain_start = paragraph_index + 1;
+            let drain_end = (drain_start + removed_paragraphs).min(self.paragraph_styles.len());
+            self.paragraph_styles.drain(drain_start..drain_end);
+        }
+
         self.split_at_char(start);
         self.split_at_char(end);
 
@@ -259,6 +362,7 @@ impl DocumentState {
         });
 
         self.normalize_runs();
+        self.ensure_paragraph_style_count();
     }
 
     pub fn apply_style_to_range(
@@ -287,6 +391,32 @@ impl DocumentState {
         self.normalize_runs();
     }
 
+    pub fn apply_paragraph_style_to_range(
+        &mut self,
+        range: Range<usize>,
+        mutate: impl Fn(&mut ParagraphStyle),
+    ) {
+        let total_chars = self.total_chars();
+        let start = range.start.min(total_chars);
+        let end = range.end.min(total_chars);
+        let start_paragraph = self.paragraph_index_at(start);
+        let end_index = if start < end {
+            end.saturating_sub(1)
+        } else {
+            start
+        };
+        let end_paragraph = self.paragraph_index_at(end_index);
+
+        for paragraph_style in self
+            .paragraph_styles
+            .iter_mut()
+            .skip(start_paragraph)
+            .take(end_paragraph.saturating_sub(start_paragraph) + 1)
+        {
+            mutate(paragraph_style);
+        }
+    }
+
     pub fn replace_with_runs(&mut self, title: String, runs: Vec<TextRun>) {
         self.title = title;
         self.runs = if runs.is_empty() {
@@ -297,7 +427,9 @@ impl DocumentState {
         } else {
             runs
         };
+        self.paragraph_styles = vec![ParagraphStyle::default(); self.paragraph_count()];
         self.normalize_runs();
+        self.ensure_paragraph_style_count();
     }
 
     pub fn load_from_path(path: &Path) -> Result<Self, String> {
@@ -347,7 +479,7 @@ impl DocumentState {
 
         let serialized = match extension.as_str() {
             "md" | "markdown" => self.to_markdown(),
-            "txt" | "" => self.plain_text(),
+            "txt" | "" => self.to_plain_text_export(),
             other => {
                 return Err(format!(
                     "saving .{other} is not supported yet; use .txt or .md"
@@ -359,65 +491,112 @@ impl DocumentState {
             .map_err(|error| format!("failed to save {}: {error}", path.display()))
     }
 
-    pub fn layout_job(&self, zoom: f32, wrap_width: f32) -> LayoutJob {
-        let mut job = LayoutJob::default();
-        job.wrap.max_width = wrap_width;
-        job.break_on_newline = true;
+    pub fn paragraphs(&self) -> Vec<Paragraph> {
+        let mut paragraphs = Vec::with_capacity(self.paragraph_count());
+        let mut current_runs = Vec::new();
+        let mut current_length = 0usize;
+        let mut paragraph_start = 0usize;
+        let mut paragraph_index = 0usize;
+        let mut ordered_index = 0usize;
+        let mut previous_was_ordered = false;
+
+        let push_paragraph = |paragraphs: &mut Vec<Paragraph>,
+                              current_runs: &mut Vec<TextRun>,
+                              current_length: &mut usize,
+                              paragraph_start: &mut usize,
+                              paragraph_index: &mut usize,
+                              ordered_index: &mut usize,
+                              previous_was_ordered: &mut bool| {
+            let style = self
+                .paragraph_styles
+                .get(*paragraph_index)
+                .copied()
+                .unwrap_or_default();
+            let list_marker = match style.list_kind {
+                ListKind::None => {
+                    *ordered_index = 0;
+                    *previous_was_ordered = false;
+                    None
+                }
+                ListKind::Bullet => {
+                    *ordered_index = 0;
+                    *previous_was_ordered = false;
+                    Some("•".to_owned())
+                }
+                ListKind::Ordered => {
+                    if *previous_was_ordered {
+                        *ordered_index += 1;
+                    } else {
+                        *ordered_index = 1;
+                        *previous_was_ordered = true;
+                    }
+                    Some(format!("{}.", *ordered_index))
+                }
+            };
+
+            paragraphs.push(Paragraph {
+                index: *paragraph_index,
+                range: *paragraph_start..(*paragraph_start + *current_length),
+                style,
+                runs: std::mem::take(current_runs),
+                list_marker,
+            });
+
+            *paragraph_start += *current_length + 1;
+            *current_length = 0;
+            *paragraph_index += 1;
+        };
 
         for run in &self.runs {
-            if run.text.is_empty() {
-                continue;
+            let mut segment = String::new();
+            for ch in run.text.chars() {
+                if ch == '\n' {
+                    if !segment.is_empty() {
+                        current_length += segment.chars().count();
+                        append_text_run(&mut current_runs, &segment, run.style);
+                        segment.clear();
+                    }
+                    push_paragraph(
+                        &mut paragraphs,
+                        &mut current_runs,
+                        &mut current_length,
+                        &mut paragraph_start,
+                        &mut paragraph_index,
+                        &mut ordered_index,
+                        &mut previous_was_ordered,
+                    );
+                } else {
+                    segment.push(ch);
+                }
             }
 
-            let mut coords = VariationCoords::default();
-            if run.style.bold {
-                coords.push("wght", 700.0);
+            if !segment.is_empty() {
+                current_length += segment.chars().count();
+                append_text_run(&mut current_runs, &segment, run.style);
             }
-
-            let line_color = run.style.text_color;
-            let font_size = if run.style.bold {
-                (run.style.font_size_points + 0.8) * zoom
-            } else {
-                run.style.font_size_points * zoom
-            };
-            let format = TextFormat {
-                font_id: FontId::new(font_size, run.style.font_choice.family()),
-                color: if run.style.bold {
-                    run.style.text_color.gamma_multiply(0.88)
-                } else {
-                    run.style.text_color
-                },
-                background: run.style.highlight_color,
-                italics: run.style.italic,
-                underline: if run.style.underline {
-                    Stroke::new(1.0, line_color)
-                } else {
-                    Stroke::NONE
-                },
-                strikethrough: if run.style.strikethrough {
-                    Stroke::new(1.0, line_color)
-                } else {
-                    Stroke::NONE
-                },
-                coords,
-                ..Default::default()
-            };
-
-            job.append(&run.text, 0.0, format);
         }
 
-        if job.sections.is_empty() {
-            job.append(
-                "",
-                0.0,
-                TextFormat::simple(
-                    FontId::new(12.0 * zoom, FontFamily::Proportional),
-                    CharacterStyle::default().text_color,
-                ),
-            );
+        push_paragraph(
+            &mut paragraphs,
+            &mut current_runs,
+            &mut current_length,
+            &mut paragraph_start,
+            &mut paragraph_index,
+            &mut ordered_index,
+            &mut previous_was_ordered,
+        );
+
+        if paragraphs.is_empty() {
+            paragraphs.push(Paragraph {
+                index: 0,
+                range: 0..0,
+                style: ParagraphStyle::default(),
+                runs: Vec::new(),
+                list_marker: None,
+            });
         }
 
-        job
+        paragraphs
     }
 
     fn split_at_char(&mut self, char_index: usize) {
@@ -464,28 +643,72 @@ impl DocumentState {
         self.runs = normalized;
     }
 
-    fn to_markdown(&self) -> String {
-        let mut output = String::new();
+    fn paragraph_index_at(&self, char_index: usize) -> usize {
+        let target = char_index.min(self.total_chars());
+        let mut paragraph_index = 0;
+        let mut offset = 0;
         for run in &self.runs {
-            let mut text = run.text.clone();
-            if run.style.font_choice == FontChoice::Monospace {
-                text = format!("`{text}`");
+            for ch in run.text.chars() {
+                if offset >= target {
+                    return paragraph_index;
+                }
+                if ch == '\n' {
+                    paragraph_index += 1;
+                }
+                offset += 1;
             }
-            if run.style.bold {
-                text = format!("**{text}**");
-            }
-            if run.style.italic {
-                text = format!("*{text}*");
-            }
-            if run.style.strikethrough {
-                text = format!("~~{text}~~");
-            }
-            if run.style.underline {
-                text = format!("<u>{text}</u>");
-            }
-            output.push_str(&text);
         }
-        output
+        paragraph_index
+    }
+
+    fn ensure_paragraph_style_count(&mut self) {
+        let target = self.paragraph_count().max(1);
+        self.paragraph_styles.resize(target, ParagraphStyle::default());
+    }
+
+    fn to_plain_text_export(&self) -> String {
+        self.paragraphs()
+            .into_iter()
+            .map(|paragraph| {
+                let mut text = plain_text_from_runs(&paragraph.runs);
+                if let Some(marker) = paragraph.list_marker {
+                    if text.is_empty() {
+                        marker
+                    } else {
+                        text.insert_str(0, &format!("{marker} "));
+                        text
+                    }
+                } else {
+                    text
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn to_markdown(&self) -> String {
+        self.paragraphs()
+            .into_iter()
+            .map(|paragraph| {
+                let mut text = markdown_text_from_runs(&paragraph.runs);
+                if let Some(marker) = paragraph.list_marker.as_deref() {
+                    let prefix = match paragraph.style.list_kind {
+                        ListKind::Bullet => "- ".to_owned(),
+                        ListKind::Ordered => format!("{marker} "),
+                        ListKind::None => String::new(),
+                    };
+                    text = format!("{prefix}{text}");
+                }
+
+                match paragraph.style.alignment {
+                    ParagraphAlignment::Left => text,
+                    ParagraphAlignment::Center => format!("<div align=\"center\">{text}</div>"),
+                    ParagraphAlignment::Right => format!("<div align=\"right\">{text}</div>"),
+                    ParagraphAlignment::Justify => format!("<div align=\"justify\">{text}</div>"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -507,4 +730,87 @@ impl PageMargins {
             left_points: 72.0,
         }
     }
+}
+
+pub(crate) fn text_format(style: CharacterStyle, zoom: f32) -> TextFormat {
+    let mut coords = VariationCoords::default();
+    if style.bold {
+        coords.push("wght", 700.0);
+    }
+
+    let line_color = style.text_color;
+    let font_size = if style.bold {
+        (style.font_size_points + 0.8) * zoom
+    } else {
+        style.font_size_points * zoom
+    };
+
+    TextFormat {
+        font_id: FontId::new(font_size, style.font_choice.family()),
+        color: if style.bold {
+            style.text_color.gamma_multiply(0.88)
+        } else {
+            style.text_color
+        },
+        background: style.highlight_color,
+        italics: style.italic,
+        underline: if style.underline {
+            Stroke::new(1.0, line_color)
+        } else {
+            Stroke::NONE
+        },
+        strikethrough: if style.strikethrough {
+            Stroke::new(1.0, line_color)
+        } else {
+            Stroke::NONE
+        },
+        coords,
+        ..Default::default()
+    }
+}
+
+fn append_text_run(runs: &mut Vec<TextRun>, text: &str, style: CharacterStyle) {
+    if text.is_empty() {
+        return;
+    }
+
+    if let Some(last) = runs.last_mut() {
+        if last.style == style {
+            last.text.push_str(text);
+            return;
+        }
+    }
+
+    runs.push(TextRun {
+        text: text.to_owned(),
+        style,
+    });
+}
+
+fn plain_text_from_runs(runs: &[TextRun]) -> String {
+    runs.iter().map(|run| run.text.as_str()).collect()
+}
+
+fn markdown_text_from_runs(runs: &[TextRun]) -> String {
+    let mut output = String::new();
+    for run in runs {
+        let mut text = run.text.clone();
+        if run.style.font_choice == FontChoice::Monospace {
+            text = format!("`{text}`");
+        }
+        if run.style.bold {
+            text = format!("**{text}**");
+        }
+        if run.style.italic {
+            text = format!("*{text}*");
+        }
+        if run.style.strikethrough {
+            text = format!("~~{text}~~");
+        }
+        if run.style.underline {
+            text = format!("<u>{text}</u>");
+        }
+        output.push_str(&text);
+    }
+    output
 }

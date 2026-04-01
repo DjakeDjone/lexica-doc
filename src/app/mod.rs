@@ -8,7 +8,7 @@ use eframe::{egui, App, CreationContext, Frame};
 
 use crate::{
     canvas::paint_document_canvas,
-    document::{CharacterStyle, DocumentState},
+    document::{CharacterStyle, DocumentState, ParagraphStyle},
 };
 
 use actions::handle_global_shortcuts;
@@ -22,6 +22,7 @@ pub struct CanvasState {
     pub pan: egui::Vec2,
     pub selection: egui::text_selection::CCursorRange,
     pub active_style: CharacterStyle,
+    pub active_paragraph_style: ParagraphStyle,
     pub last_interaction_time: f64,
 }
 
@@ -32,6 +33,7 @@ impl Default for CanvasState {
             pan: egui::Vec2::ZERO,
             selection: egui::text_selection::CCursorRange::default(),
             active_style: CharacterStyle::default(),
+            active_paragraph_style: ParagraphStyle::default(),
             last_interaction_time: 0.0,
         }
     }

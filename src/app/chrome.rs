@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::document::{DocumentState, FontChoice};
+use crate::document::{DocumentState, FontChoice, ListKind, ParagraphAlignment};
 
 use super::{
     actions::{
         open_document, save_document, set_font_choice, set_font_size, set_highlight_color,
-        set_text_color, sync_active_style, toggle_bold, toggle_italic, toggle_strikethrough,
+        set_paragraph_alignment, set_text_color, sync_active_style, toggle_bold,
+        toggle_bullet_list, toggle_italic, toggle_ordered_list, toggle_strikethrough,
         toggle_underline,
     },
     palette::{theme_switch, ThemeMode, ThemePalette},
@@ -160,6 +161,7 @@ pub(super) fn paint_ribbon(
                 RibbonTab::Home => {
                     ribbon_file_group(ui, document, canvas, status_message, current_path, palette);
                     ribbon_font_group(ui, document, canvas, palette);
+                    ribbon_paragraph_group(ui, document, canvas, palette);
                     ribbon_color_group(ui, document, canvas, palette);
                     ribbon_view_group(ui, canvas, status_message, theme_mode, palette);
                 }
@@ -174,6 +176,7 @@ pub(super) fn paint_ribbon(
                 }
                 RibbonTab::Design => {
                     ribbon_font_group(ui, document, canvas, palette);
+                    ribbon_paragraph_group(ui, document, canvas, palette);
                     ribbon_color_group(ui, document, canvas, palette);
                 }
                 RibbonTab::Layout => {
@@ -309,13 +312,67 @@ fn ribbon_font_group(
     });
 }
 
-fn ribbon_color_group(
+fn ribbon_paragraph_group(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Paragraph", palette, |ui| {
+        for alignment in ParagraphAlignment::ALL {
+            let label = match alignment {
+                ParagraphAlignment::Left => "L",
+                ParagraphAlignment::Center => "C",
+                ParagraphAlignment::Right => "R",
+                ParagraphAlignment::Justify => "J",
+            };
+            if format_button(
+                ui,
+                canvas.active_paragraph_style.alignment == alignment,
+                label,
+                palette,
+            )
+            .on_hover_text(alignment.label())
+            .clicked()
+            {
+                set_paragraph_alignment(document, canvas, alignment);
+            }
+        }
+
+        ui.separator();
+
+        if format_button(
+            ui,
+            canvas.active_paragraph_style.list_kind == ListKind::Bullet,
+            "•",
+            palette,
+        )
+        .on_hover_text(ListKind::Bullet.label())
+        .clicked()
+        {
+            toggle_bullet_list(document, canvas);
+        }
+        if format_button(
+            ui,
+            canvas.active_paragraph_style.list_kind == ListKind::Ordered,
+            "1.",
+            palette,
+        )
+        .on_hover_text(ListKind::Ordered.label())
+        .clicked()
+        {
+            toggle_ordered_list(document, canvas);
+        }
+    });
+}
+
+fn ribbon_color_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Colors", palette, |ui| {
         let mut text_color = canvas.active_style.text_color;
         if ui.color_edit_button_srgba(&mut text_color).changed() {
             set_text_color(document, canvas, text_color);
