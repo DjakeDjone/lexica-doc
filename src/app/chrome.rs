@@ -60,6 +60,7 @@ pub(super) fn paint_title_bar(
     status_target: &mut String,
     history: &mut ChangeHistory,
     palette: ThemePalette,
+    logo: &egui::TextureHandle,
 ) {
     let path_label = current_path
         .as_ref()
@@ -70,11 +71,12 @@ pub(super) fn paint_title_bar(
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("wors")
-                        .size(15.0)
-                        .strong()
-                        .color(palette.title_fg),
+                ui.add(
+                    egui::Image::new(egui::load::SizedTexture::new(
+                        logo.id(),
+                        egui::vec2(24.0, 24.0),
+                    ))
+                    .sense(egui::Sense::hover()),
                 );
                 ui.separator();
 

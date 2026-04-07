@@ -148,7 +148,10 @@ pub struct WorsApp {
     theme_mode: ThemeMode,
     status_message: String,
     current_path: Option<PathBuf>,
+    logo_texture: egui::TextureHandle,
 }
+
+const LOGO_BYTES: &[u8] = include_bytes!("../../assets/logo.png");
 
 impl WorsApp {
     pub fn new(cc: &CreationContext<'_>) -> Self {
@@ -158,6 +161,14 @@ impl WorsApp {
         let theme_mode = ThemeMode::Light;
         configure_theme(&cc.egui_ctx, theme_mode, theme_palette(theme_mode));
 
+        let logo_texture = {
+            let img = ::image::load_from_memory(LOGO_BYTES).expect("Failed to load logo");
+            let rgba = img.to_rgba8();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+            cc.egui_ctx.load_texture("app-logo", color_image, egui::TextureOptions::LINEAR)
+        };
+
         Self {
             document: DocumentState::bootstrap(),
             canvas: CanvasState::default(),
@@ -166,6 +177,7 @@ impl WorsApp {
             theme_mode,
             status_message: "Ready".to_owned(),
             current_path: None,
+            logo_texture,
         }
     }
 }
@@ -198,6 +210,7 @@ impl App for WorsApp {
                     &mut self.status_message,
                     &mut self.history,
                     palette,
+                    &self.logo_texture,
                 );
             });
 
