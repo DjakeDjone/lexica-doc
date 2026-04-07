@@ -4,7 +4,7 @@ use eframe::egui::{
     self, epaint::text::cursor::CCursor, text_selection::CCursorRange, Event, Key, Modifiers,
 };
 
-use crate::{app::CanvasState, document::DocumentState};
+use crate::{app::{CanvasState, ChangeHistory}, document::DocumentState};
 
 use super::page_layout::PageLayout;
 
@@ -111,6 +111,7 @@ pub(super) fn handle_keyboard_input(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     galley: &Arc<egui::Galley>,
+    history: &mut ChangeHistory,
 ) -> bool {
     let os = ui.ctx().os();
     let events = ui.input(|i| i.events.clone());
@@ -119,10 +120,14 @@ pub(super) fn handle_keyboard_input(
     for event in events {
         match event {
             Event::Text(text) if !text.is_empty() => {
+                let now = ui.input(|i| i.time);
+                history.checkpoint_coalesced(document, now);
                 replace_selection_or_insert(document, canvas, &text);
                 changed = true;
             }
             Event::Paste(text) => {
+                let now = ui.input(|i| i.time);
+                history.checkpoint(document, now);
                 replace_selection_or_insert(document, canvas, &text);
                 changed = true;
             }
@@ -135,6 +140,8 @@ pub(super) fn handle_keyboard_input(
             Event::Cut => {
                 let selected = canvas.selection.as_sorted_char_range();
                 if selected.start < selected.end {
+                    let now = ui.input(|i| i.time);
+                    history.checkpoint(document, now);
                     ui.copy_text(document.selected_text(selected.clone()));
                     document.delete_range(selected.clone());
                     canvas.selection = CCursorRange::one(CCursor::new(selected.start));
@@ -147,7 +154,7 @@ pub(super) fn handle_keyboard_input(
                 modifiers,
                 ..
             } => {
-                if handle_shortcut_key(document, canvas, key, modifiers) {
+                if handle_shortcut_key(document, canvas, key, modifiers, history, ui) {
                     changed = true;
                     continue;
                 }
@@ -159,13 +166,25 @@ pub(super) fn handle_keyboard_input(
                     Key::PageDown => {
                         canvas.pan.y -= 120.0;
                     }
-                    Key::Backspace => changed |= delete_backward(document, canvas),
-                    Key::Delete => changed |= delete_forward(document, canvas),
+                    Key::Backspace => {
+                        let now = ui.input(|i| i.time);
+                        history.checkpoint_coalesced(document, now);
+                        changed |= delete_backward(document, canvas);
+                    }
+                    Key::Delete => {
+                        let now = ui.input(|i| i.time);
+                        history.checkpoint_coalesced(document, now);
+                        changed |= delete_forward(document, canvas);
+                    }
                     Key::Enter => {
+                        let now = ui.input(|i| i.time);
+                        history.checkpoint(document, now);
                         replace_selection_or_insert(document, canvas, "\n");
                         changed = true;
                     }
                     Key::Tab => {
+                        let now = ui.input(|i| i.time);
+                        history.checkpoint(document, now);
                         replace_selection_or_insert(document, canvas, "    ");
                         changed = true;
                     }
@@ -205,6 +224,8 @@ fn handle_shortcut_key(
     canvas: &mut CanvasState,
     key: Key,
     modifiers: Modifiers,
+    history: &mut ChangeHistory,
+    ui: &mut egui::Ui,
 ) -> bool {
     if !modifiers.command {
         return false;
@@ -213,6 +234,8 @@ fn handle_shortcut_key(
     let range = canvas.selection.as_sorted_char_range();
     match key {
         Key::B => {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
             let next = !canvas.active_style.bold;
             if range.start < range.end {
                 document.apply_style_to_range(range, |style| style.bold = next);
@@ -221,6 +244,8 @@ fn handle_shortcut_key(
             true
         }
         Key::I => {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
             let next = !canvas.active_style.italic;
             if range.start < range.end {
                 document.apply_style_to_range(range, |style| style.italic = next);
@@ -229,6 +254,8 @@ fn handle_shortcut_key(
             true
         }
         Key::U => {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
             let next = !canvas.active_style.underline;
             if range.start < range.end {
                 document.apply_style_to_range(range, |style| style.underline = next);

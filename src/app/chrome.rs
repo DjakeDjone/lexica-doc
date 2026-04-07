@@ -16,7 +16,7 @@ use super::{
         toggle_strikethrough, toggle_underline,
     },
     palette::{theme_switch, ThemeMode, ThemePalette},
-    CanvasState,
+    CanvasState, ChangeHistory,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -52,11 +52,13 @@ impl RibbonTab {
 
 pub(super) fn paint_title_bar(
     ui: &mut egui::Ui,
-    document: &DocumentState,
+    document: &mut crate::document::DocumentState,
+    canvas: &mut CanvasState,
     current_path: &Option<PathBuf>,
     status_message: &str,
     theme_mode: &mut ThemeMode,
     status_target: &mut String,
+    history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
     let path_label = current_path
@@ -74,6 +76,48 @@ pub(super) fn paint_title_bar(
                         .strong()
                         .color(palette.title_fg),
                 );
+                ui.separator();
+
+                // Undo / Redo buttons in title bar
+                let can_undo = history.can_undo();
+                let can_redo = history.can_redo();
+                let undo_btn = egui::Button::new(
+                    egui::RichText::new("↩")
+                        .size(14.0)
+                        .color(if can_undo { palette.title_fg } else { palette.title_muted }),
+                )
+                .min_size(egui::vec2(24.0, 24.0))
+                .fill(egui::Color32::TRANSPARENT)
+                .stroke(egui::Stroke::NONE);
+                if ui
+                    .add_enabled(can_undo, undo_btn)
+                    .on_hover_text("Undo (Ctrl+Z)")
+                    .clicked()
+                {
+                    if history.undo(document) {
+                        canvas.image_textures.clear();
+                        *status_target = "Undo".to_owned();
+                    }
+                }
+                let redo_btn = egui::Button::new(
+                    egui::RichText::new("↪")
+                        .size(14.0)
+                        .color(if can_redo { palette.title_fg } else { palette.title_muted }),
+                )
+                .min_size(egui::vec2(24.0, 24.0))
+                .fill(egui::Color32::TRANSPARENT)
+                .stroke(egui::Stroke::NONE);
+                if ui
+                    .add_enabled(can_redo, redo_btn)
+                    .on_hover_text("Redo (Ctrl+Shift+Z / Ctrl+Y)")
+                    .clicked()
+                {
+                    if history.redo(document) {
+                        canvas.image_textures.clear();
+                        *status_target = "Redo".to_owned();
+                    }
+                }
+
                 ui.separator();
                 ui.label(
                     egui::RichText::new(format!("{} - Word", document.title))
@@ -193,6 +237,7 @@ pub(super) fn paint_ribbon(
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
     theme_mode: &mut ThemeMode,
+    history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
     sync_active_style(document, canvas);
@@ -202,15 +247,15 @@ pub(super) fn paint_ribbon(
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| match active_tab {
                 RibbonTab::Home => {
-                    ribbon_file_group(ui, document, canvas, status_message, current_path, palette);
-                    ribbon_font_group(ui, document, canvas, palette);
-                    ribbon_paragraph_group(ui, document, canvas, palette);
-                    ribbon_color_group(ui, document, canvas, palette);
+                    ribbon_file_group(ui, document, canvas, status_message, current_path, history, palette);
+                    ribbon_font_group(ui, document, canvas, history, palette);
+                    ribbon_paragraph_group(ui, document, canvas, history, palette);
+                    ribbon_color_group(ui, document, canvas, history, palette);
                     ribbon_view_group(ui, canvas, status_message, theme_mode, palette);
                 }
                 RibbonTab::Insert => {
-                    ribbon_file_group(ui, document, canvas, status_message, current_path, palette);
-                    ribbon_insert_group(ui, document, canvas, status_message, palette);
+                    ribbon_file_group(ui, document, canvas, status_message, current_path, history, palette);
+                    ribbon_insert_group(ui, document, canvas, status_message, history, palette);
                     ribbon_info_group(
                         ui,
                         "Insert",
@@ -219,9 +264,9 @@ pub(super) fn paint_ribbon(
                     );
                 }
                 RibbonTab::Design => {
-                    ribbon_font_group(ui, document, canvas, palette);
-                    ribbon_paragraph_group(ui, document, canvas, palette);
-                    ribbon_color_group(ui, document, canvas, palette);
+                    ribbon_font_group(ui, document, canvas, history, palette);
+                    ribbon_paragraph_group(ui, document, canvas, history, palette);
+                    ribbon_color_group(ui, document, canvas, history, palette);
                 }
                 RibbonTab::Layout => {
                     ribbon_view_group(ui, canvas, status_message, theme_mode, palette);
@@ -242,12 +287,12 @@ pub(super) fn paint_ribbon(
                     ribbon_info_group(
                         ui,
                         "Shortcuts",
-                        "Command+S Save, Command+B Bold, Command+I Italic, Command+U Underline",
+                        "Command+S Save, Ctrl+Z Undo, Ctrl+Shift+Z / Ctrl+Y Redo, Command+B Bold, Command+I Italic, Command+U Underline",
                         palette,
                     );
                 }
                 RibbonTab::Picture => {
-                    ribbon_picture_group(ui, document, canvas, status_message, palette);
+                    ribbon_picture_group(ui, document, canvas, status_message, history, palette);
                 }
             });
         });
@@ -300,11 +345,12 @@ fn ribbon_file_group(
     canvas: &mut CanvasState,
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
+    history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Clipboard", palette, |ui| {
         if ui.button("📂 Open").clicked() {
-            open_document(document, canvas, status_message, current_path);
+            open_document(document, canvas, status_message, current_path, history);
         }
         if ui.button("💾 Save").clicked() {
             save_document(document, status_message, current_path);
@@ -316,6 +362,7 @@ fn ribbon_font_group(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
     canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Font", palette, |ui| {
@@ -328,37 +375,36 @@ fn ribbon_font_group(
                         .selectable_label(canvas.active_style.font_choice == font, font.label())
                         .clicked()
                     {
-                        set_font_choice(document, canvas, font);
+                        set_font_choice(document, canvas, font, history);
                     }
                 }
             });
 
         let mut font_size = canvas.active_style.font_size_points;
-        if ui
-            .add(
-                egui::DragValue::new(&mut font_size)
-                    .range(8.0..=72.0)
-                    .speed(0.25)
-                    .fixed_decimals(1),
-            )
-            .changed()
-        {
-            set_font_size(document, canvas, font_size.clamp(8.0, 72.0));
+        let resp = ui.add(
+            egui::DragValue::new(&mut font_size)
+                .range(8.0..=72.0)
+                .speed(0.25)
+                .fixed_decimals(1),
+        );
+        if resp.changed() {
+            let now = ui.input(|i| i.time);
+            set_font_size(document, canvas, font_size.clamp(8.0, 72.0), history, now);
         }
 
         ui.separator();
 
         if format_button(ui, canvas.active_style.bold, "B", palette).clicked() {
-            toggle_bold(document, canvas);
+            toggle_bold(document, canvas, history);
         }
         if format_button(ui, canvas.active_style.italic, "I", palette).clicked() {
-            toggle_italic(document, canvas);
+            toggle_italic(document, canvas, history);
         }
         if format_button(ui, canvas.active_style.underline, "U", palette).clicked() {
-            toggle_underline(document, canvas);
+            toggle_underline(document, canvas, history);
         }
         if format_button(ui, canvas.active_style.strikethrough, "S", palette).clicked() {
-            toggle_strikethrough(document, canvas);
+            toggle_strikethrough(document, canvas, history);
         }
     });
 }
@@ -368,14 +414,15 @@ fn ribbon_insert_group(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     status_message: &mut String,
+    history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Insert", palette, |ui| {
         if ui.button("Image").clicked() {
-            insert_image(document, canvas, status_message);
+            insert_image(document, canvas, status_message, history);
         }
         if ui.button("Page Break").clicked() {
-            insert_page_break(document, canvas, status_message);
+            insert_page_break(document, canvas, status_message, history);
         }
     });
 }
@@ -384,6 +431,7 @@ fn ribbon_paragraph_group(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
     canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Paragraph", palette, |ui| {
@@ -397,7 +445,7 @@ fn ribbon_paragraph_group(
             .on_hover_text(alignment.label())
             .clicked()
             {
-                set_paragraph_alignment(document, canvas, alignment);
+                set_paragraph_alignment(document, canvas, alignment, history);
             }
         }
 
@@ -412,7 +460,7 @@ fn ribbon_paragraph_group(
         .on_hover_text(ListKind::Bullet.label())
         .clicked()
         {
-            toggle_bullet_list(document, canvas);
+            toggle_bullet_list(document, canvas, history);
         }
         if format_button(
             ui,
@@ -423,7 +471,7 @@ fn ribbon_paragraph_group(
         .on_hover_text(ListKind::Ordered.label())
         .clicked()
         {
-            toggle_ordered_list(document, canvas);
+            toggle_ordered_list(document, canvas, history);
         }
     });
 }
@@ -432,12 +480,15 @@ fn ribbon_color_group(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
     canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Colors", palette, |ui| {
         let mut text_color = canvas.active_style.text_color;
-        if ui.color_edit_button_srgba(&mut text_color).changed() {
-            set_text_color(document, canvas, text_color);
+        let resp = ui.color_edit_button_srgba(&mut text_color);
+        if resp.changed() {
+            let now = ui.input(|i| i.time);
+            set_text_color(document, canvas, text_color, history, now);
         }
         ui.label(
             egui::RichText::new("Text")
@@ -446,8 +497,10 @@ fn ribbon_color_group(
         );
 
         let mut highlight = canvas.active_style.highlight_color;
-        if ui.color_edit_button_srgba(&mut highlight).changed() {
-            set_highlight_color(document, canvas, highlight);
+        let resp = ui.color_edit_button_srgba(&mut highlight);
+        if resp.changed() {
+            let now = ui.input(|i| i.time);
+            set_highlight_color(document, canvas, highlight, history, now);
         }
         ui.label(
             egui::RichText::new("Highlight")
@@ -497,6 +550,7 @@ fn ribbon_picture_group(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     status_message: &mut String,
+    history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
     let Some(image_id) = canvas.selected_image_id else {
@@ -519,16 +573,16 @@ fn ribbon_picture_group(
         ui.label(egui::RichText::new("W:").size(11.0).color(palette.text_muted));
         let mut width = image.width_points;
         let aspect = image.height_points / image.width_points.max(1.0);
-        if ui
-            .add(
-                egui::DragValue::new(&mut width)
-                    .speed(1.0)
-                    .range(24.0..=1200.0)
-                    .fixed_decimals(0)
-                    .suffix(" pt"),
-            )
-            .changed()
-        {
+        let resp = ui.add(
+            egui::DragValue::new(&mut width)
+                .speed(1.0)
+                .range(24.0..=1200.0)
+                .fixed_decimals(0)
+                .suffix(" pt"),
+        );
+        if resp.changed() {
+            let now = ui.input(|i| i.time);
+            history.checkpoint_coalesced(document, now);
             let new_h = (width * aspect).max(24.0);
             document.resize_image_by_id(image_id, width, new_h);
             *status_message = format!("Image: {:.0} × {:.0} pt", width, new_h);
@@ -537,16 +591,16 @@ fn ribbon_picture_group(
         ui.label(egui::RichText::new("H:").size(11.0).color(palette.text_muted));
         let mut height = image.height_points;
         let aspect_inv = image.width_points / image.height_points.max(1.0);
-        if ui
-            .add(
-                egui::DragValue::new(&mut height)
-                    .speed(1.0)
-                    .range(24.0..=1200.0)
-                    .fixed_decimals(0)
-                    .suffix(" pt"),
-            )
-            .changed()
-        {
+        let resp = ui.add(
+            egui::DragValue::new(&mut height)
+                .speed(1.0)
+                .range(24.0..=1200.0)
+                .fixed_decimals(0)
+                .suffix(" pt"),
+        );
+        if resp.changed() {
+            let now = ui.input(|i| i.time);
+            history.checkpoint_coalesced(document, now);
             let new_w = (height * aspect_inv).max(24.0);
             document.resize_image_by_id(image_id, new_w, height);
             *status_message = format!("Image: {:.0} × {:.0} pt", new_w, height);
@@ -555,7 +609,7 @@ fn ribbon_picture_group(
 
     ribbon_group(ui, "Adjust", palette, |ui| {
         if ui.button("Reset Size").clicked() {
-            reset_image_size(document, canvas, image_id, status_message);
+            reset_image_size(document, canvas, image_id, status_message, history);
         }
         ui.separator();
         ui.label(
@@ -567,26 +621,24 @@ fn ribbon_picture_group(
 
     ribbon_group(ui, "Transparency", palette, |ui| {
         let mut opacity_pct = image.opacity * 100.0;
-        if ui
-            .add(
-                egui::DragValue::new(&mut opacity_pct)
-                    .speed(1.0)
-                    .range(0.0..=100.0)
-                    .fixed_decimals(0)
-                    .suffix("%"),
-            )
-            .changed()
-        {
-            set_image_opacity(document, image_id, opacity_pct / 100.0, status_message);
+        let resp = ui.add(
+            egui::DragValue::new(&mut opacity_pct)
+                .speed(1.0)
+                .range(0.0..=100.0)
+                .fixed_decimals(0)
+                .suffix("%"),
+        );
+        if resp.changed() {
+            let now = ui.input(|i| i.time);
+            set_image_opacity(document, image_id, opacity_pct / 100.0, status_message, history, now);
         }
         ui.vertical(|ui| {
             ui.spacing_mut().slider_width = 80.0;
             let mut opacity_val = image.opacity;
-            if ui
-                .add(egui::Slider::new(&mut opacity_val, 0.0..=1.0).show_value(false))
-                .changed()
-            {
-                set_image_opacity(document, image_id, opacity_val, status_message);
+            let resp = ui.add(egui::Slider::new(&mut opacity_val, 0.0..=1.0).show_value(false));
+            if resp.changed() {
+                let now = ui.input(|i| i.time);
+                set_image_opacity(document, image_id, opacity_val, status_message, history, now);
             }
         });
     });
@@ -598,7 +650,7 @@ fn ribbon_picture_group(
                 .on_hover_text(wrap.label())
                 .clicked()
             {
-                set_image_wrap_mode(document, image_id, wrap, status_message);
+                set_image_wrap_mode(document, image_id, wrap, status_message, history);
             }
         }
     });
@@ -608,13 +660,13 @@ fn ribbon_picture_group(
             .on_hover_text("Bilinear filtering (smooth edges)")
             .clicked()
         {
-            set_image_rendering(document, canvas, image_id, ImageRendering::Smooth, status_message);
+            set_image_rendering(document, canvas, image_id, ImageRendering::Smooth, status_message, history);
         }
         if format_button(ui, image.rendering == ImageRendering::Crisp, "Crisp", palette)
             .on_hover_text("Nearest-neighbor (pixel-perfect / sharp)")
             .clicked()
         {
-            set_image_rendering(document, canvas, image_id, ImageRendering::Crisp, status_message);
+            set_image_rendering(document, canvas, image_id, ImageRendering::Crisp, status_message, history);
         }
     });
 }

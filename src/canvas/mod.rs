@@ -13,7 +13,7 @@ use eframe::egui::{
 };
 
 use crate::{
-    app::{CanvasState, ImageResizeDrag, ResizeHandle, ThemeMode},
+    app::{CanvasState, ChangeHistory, ImageResizeDrag, ResizeHandle, ThemeMode},
     document::{
         text_format, CharacterStyle, DocumentImage, DocumentState, ImageRendering,
         ParagraphAlignment, OBJECT_REPLACEMENT_CHAR,
@@ -54,6 +54,7 @@ pub fn paint_document_canvas(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     theme_mode: ThemeMode,
+    history: &mut ChangeHistory,
 ) {
     let palette = canvas_palette(theme_mode);
     let viewport = ui.available_rect_before_wrap();
@@ -89,7 +90,7 @@ pub fn paint_document_canvas(
     );
 
     let has_focus = ui.memory(|mem| mem.has_focus(editor_id));
-    if has_focus && handle_keyboard_input(ui, document, canvas, &document_layout.galley) {
+    if has_focus && handle_keyboard_input(ui, document, canvas, &document_layout.galley, history) {
         document_layout = layout_document(ui, document, canvas, content_size.x);
     }
 

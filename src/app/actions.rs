@@ -8,13 +8,14 @@ use crate::document::{
     ParagraphStyle,
 };
 
-use super::CanvasState;
+use super::{CanvasState, ChangeHistory};
 
 pub(super) fn open_document(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
+    history: &mut ChangeHistory,
 ) {
     if let Some(path) = FileDialog::new()
         .add_filter("supported", &["txt", "md", "markdown", "docx"])
@@ -22,6 +23,7 @@ pub(super) fn open_document(
     {
         match DocumentState::load_from_path(&path) {
             Ok(new_document) => {
+                history.clear();
                 *document = new_document;
                 canvas.selection = egui::text_selection::CCursorRange::default();
                 canvas.active_style = CharacterStyle::default();
@@ -84,7 +86,9 @@ pub(super) fn insert_page_break(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     status_message: &mut String,
+    history: &mut ChangeHistory,
 ) {
+    history.checkpoint(document, f64::NAN);
     let selected = canvas.selection.as_sorted_char_range();
     let insert_at = selected.start;
     if selected.start < selected.end {
@@ -104,6 +108,7 @@ pub(super) fn insert_image(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     status_message: &mut String,
+    history: &mut ChangeHistory,
 ) {
     let Some(path) = FileDialog::new()
         .add_filter("images", &["png", "jpg", "jpeg", "gif", "bmp"])
@@ -120,6 +125,7 @@ pub(super) fn insert_image(
         }
     };
 
+    history.checkpoint(document, f64::NAN);
     let selected = canvas.selection.as_sorted_char_range();
     let insert_at = selected.start;
     if selected.start < selected.end {
@@ -144,11 +150,37 @@ pub(super) fn insert_image(
 pub(super) fn handle_global_shortcuts(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
     current_path: &mut Option<PathBuf>,
     status_message: &mut String,
 ) {
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
         save_document(document, status_message, current_path);
+    }
+    if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+        if ui.input(|i| i.modifiers.shift) {
+            if history.redo(document) {
+                canvas.image_textures.clear();
+                *status_message = "Redo".to_owned();
+            }
+        } else if history.undo(document) {
+            canvas.image_textures.clear();
+            *status_message = "Undo".to_owned();
+        }
+    }
+    if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z)) {
+        if history.redo(document) {
+            canvas.image_textures.clear();
+            *status_message = "Redo".to_owned();
+        }
+    }
+    // Ctrl+Y as an alternative redo shortcut
+    if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)) {
+        if history.redo(document) {
+            canvas.image_textures.clear();
+            *status_message = "Redo".to_owned();
+        }
     }
 }
 
@@ -157,7 +189,10 @@ pub(super) fn set_image_opacity(
     image_id: usize,
     opacity: f32,
     status_message: &mut String,
+    history: &mut ChangeHistory,
+    now: f64,
 ) {
+    history.checkpoint_coalesced(document, now);
     document.set_image_opacity(image_id, opacity);
     *status_message = format!("Opacity: {:.0}%", opacity * 100.0);
 }
@@ -167,7 +202,9 @@ pub(super) fn set_image_wrap_mode(
     image_id: usize,
     wrap_mode: crate::document::WrapMode,
     status_message: &mut String,
+    history: &mut ChangeHistory,
 ) {
+    history.checkpoint(document, f64::NAN);
     document.set_image_wrap_mode(image_id, wrap_mode);
     *status_message = format!("Wrap: {}", wrap_mode.label());
 }
@@ -178,7 +215,9 @@ pub(super) fn set_image_rendering(
     image_id: usize,
     rendering: crate::document::ImageRendering,
     status_message: &mut String,
+    history: &mut ChangeHistory,
 ) {
+    history.checkpoint(document, f64::NAN);
     document.set_image_rendering(image_id, rendering);
     // Clear both possible cache entries for this image so texture is rebuilt
     canvas.image_textures.remove(&(image_id * 2));
@@ -194,7 +233,9 @@ pub(super) fn reset_image_size(
     _canvas: &mut CanvasState,
     image_id: usize,
     status_message: &mut String,
+    history: &mut ChangeHistory,
 ) {
+    history.checkpoint(document, f64::NAN);
     let image_bytes = document
         .paragraph_images
         .iter()
@@ -219,22 +260,26 @@ pub(super) fn reset_image_size(
     }
 }
 
-pub(super) fn toggle_bold(document: &mut DocumentState, canvas: &mut CanvasState) {
+pub(super) fn toggle_bold(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+    history.checkpoint(document, f64::NAN);
     let next_value = !canvas.active_style.bold;
     apply_selection_or_active_style(document, canvas, move |style| style.bold = next_value);
 }
 
-pub(super) fn toggle_italic(document: &mut DocumentState, canvas: &mut CanvasState) {
+pub(super) fn toggle_italic(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+    history.checkpoint(document, f64::NAN);
     let next_value = !canvas.active_style.italic;
     apply_selection_or_active_style(document, canvas, move |style| style.italic = next_value);
 }
 
-pub(super) fn toggle_underline(document: &mut DocumentState, canvas: &mut CanvasState) {
+pub(super) fn toggle_underline(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+    history.checkpoint(document, f64::NAN);
     let next_value = !canvas.active_style.underline;
     apply_selection_or_active_style(document, canvas, move |style| style.underline = next_value);
 }
 
-pub(super) fn toggle_strikethrough(document: &mut DocumentState, canvas: &mut CanvasState) {
+pub(super) fn toggle_strikethrough(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+    history.checkpoint(document, f64::NAN);
     let next_value = !canvas.active_style.strikethrough;
     apply_selection_or_active_style(document, canvas, move |style| {
         style.strikethrough = next_value
@@ -245,7 +290,10 @@ pub(super) fn set_font_size(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     font_size: f32,
+    history: &mut ChangeHistory,
+    now: f64,
 ) {
+    history.checkpoint_coalesced(document, now);
     apply_selection_or_active_style(document, canvas, move |style| {
         style.font_size_points = font_size
     });
@@ -255,7 +303,9 @@ pub(super) fn set_font_choice(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     font_choice: FontChoice,
+    history: &mut ChangeHistory,
 ) {
+    history.checkpoint(document, f64::NAN);
     apply_selection_or_active_style(document, canvas, move |style| {
         style.font_choice = font_choice
     });
@@ -265,7 +315,10 @@ pub(super) fn set_text_color(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     color: egui::Color32,
+    history: &mut ChangeHistory,
+    now: f64,
 ) {
+    history.checkpoint_coalesced(document, now);
     apply_selection_or_active_style(document, canvas, move |style| style.text_color = color);
 }
 
@@ -273,7 +326,10 @@ pub(super) fn set_highlight_color(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     color: egui::Color32,
+    history: &mut ChangeHistory,
+    now: f64,
 ) {
+    history.checkpoint_coalesced(document, now);
     apply_selection_or_active_style(document, canvas, move |style| style.highlight_color = color);
 }
 
@@ -292,13 +348,16 @@ pub(super) fn set_paragraph_alignment(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     alignment: ParagraphAlignment,
+    history: &mut ChangeHistory,
 ) {
+    history.checkpoint(document, f64::NAN);
     apply_selection_or_current_paragraph(document, canvas, move |style| {
         style.alignment = alignment
     });
 }
 
-pub(super) fn toggle_bullet_list(document: &mut DocumentState, canvas: &mut CanvasState) {
+pub(super) fn toggle_bullet_list(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+    history.checkpoint(document, f64::NAN);
     let next = if canvas.active_paragraph_style.list_kind == ListKind::Bullet {
         ListKind::None
     } else {
@@ -307,7 +366,8 @@ pub(super) fn toggle_bullet_list(document: &mut DocumentState, canvas: &mut Canv
     apply_selection_or_current_paragraph(document, canvas, move |style| style.list_kind = next);
 }
 
-pub(super) fn toggle_ordered_list(document: &mut DocumentState, canvas: &mut CanvasState) {
+pub(super) fn toggle_ordered_list(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+    history.checkpoint(document, f64::NAN);
     let next = if canvas.active_paragraph_style.list_kind == ListKind::Ordered {
         ListKind::None
     } else {

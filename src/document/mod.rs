@@ -209,6 +209,7 @@ pub struct PageMargins {
     pub left_points: f32,
 }
 
+#[derive(Clone)]
 pub struct DocumentState {
     pub title: String,
     pub runs: Vec<TextRun>,

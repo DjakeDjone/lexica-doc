@@ -18,6 +18,85 @@ use palette::{configure_theme, theme_palette};
 
 pub use palette::ThemeMode;
 
+const HISTORY_LIMIT: usize = 200;
+
+pub struct ChangeHistory {
+    undo_stack: Vec<DocumentState>,
+    redo_stack: Vec<DocumentState>,
+    last_checkpoint_time: f64,
+}
+
+impl ChangeHistory {
+    pub fn new() -> Self {
+        Self {
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            last_checkpoint_time: f64::NEG_INFINITY,
+        }
+    }
+
+    fn push_snapshot(&mut self, document: &DocumentState) {
+        self.undo_stack.push(document.clone());
+        self.redo_stack.clear();
+        if self.undo_stack.len() > HISTORY_LIMIT {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    /// Always checkpoint — use before discrete actions (button clicks).
+    pub fn checkpoint(&mut self, document: &DocumentState, now: f64) {
+        self.push_snapshot(document);
+        self.last_checkpoint_time = now;
+    }
+
+    /// Checkpoint only if enough time has elapsed — use before continuous controls (drag values).
+    pub fn checkpoint_coalesced(&mut self, document: &DocumentState, now: f64) {
+        if now - self.last_checkpoint_time > 0.75 {
+            self.push_snapshot(document);
+            self.last_checkpoint_time = now;
+        }
+    }
+
+    pub fn undo(&mut self, document: &mut DocumentState) -> bool {
+        if let Some(prev) = self.undo_stack.pop() {
+            self.redo_stack.push(document.clone());
+            if self.redo_stack.len() > HISTORY_LIMIT {
+                self.redo_stack.remove(0);
+            }
+            *document = prev;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn redo(&mut self, document: &mut DocumentState) -> bool {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(document.clone());
+            if self.undo_stack.len() > HISTORY_LIMIT {
+                self.undo_stack.remove(0);
+            }
+            *document = next;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResizeHandle {
     NW, N, NE, E, SE, S, SW, W,
@@ -64,6 +143,7 @@ impl Default for CanvasState {
 pub struct WorsApp {
     document: DocumentState,
     canvas: CanvasState,
+    history: ChangeHistory,
     active_tab: RibbonTab,
     theme_mode: ThemeMode,
     status_message: String,
@@ -81,6 +161,7 @@ impl WorsApp {
         Self {
             document: DocumentState::bootstrap(),
             canvas: CanvasState::default(),
+            history: ChangeHistory::new(),
             active_tab: RibbonTab::Home,
             theme_mode,
             status_message: "Ready".to_owned(),
@@ -94,6 +175,8 @@ impl App for WorsApp {
         handle_global_shortcuts(
             ui,
             &mut self.document,
+            &mut self.canvas,
+            &mut self.history,
             &mut self.current_path,
             &mut self.status_message,
         );
@@ -107,11 +190,13 @@ impl App for WorsApp {
             .show_inside(ui, |ui| {
                 paint_title_bar(
                     ui,
-                    &self.document,
+                    &mut self.document,
+                    &mut self.canvas,
                     &self.current_path,
                     &status_line,
                     &mut self.theme_mode,
                     &mut self.status_message,
+                    &mut self.history,
                     palette,
                 );
             });
@@ -137,6 +222,7 @@ impl App for WorsApp {
                     &mut self.status_message,
                     &mut self.current_path,
                     &mut self.theme_mode,
+                    &mut self.history,
                     palette,
                 );
             });
@@ -144,7 +230,7 @@ impl App for WorsApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(palette.workspace_bg))
             .show_inside(ui, |ui| {
-                paint_document_canvas(ui, &mut self.document, &mut self.canvas, self.theme_mode);
+                paint_document_canvas(ui, &mut self.document, &mut self.canvas, self.theme_mode, &mut self.history);
             });
 
         // Auto-switch to Picture contextual tab when an image is selected
