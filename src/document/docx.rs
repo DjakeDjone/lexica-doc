@@ -12,16 +12,18 @@ use crate::document::{
     CharacterStyle, DocumentImage, ListKind, PageMargins, PageSize, ParagraphAlignment,
     ParagraphStyle, TextRun, OBJECT_REPLACEMENT_CHAR,
 };
+use serde::Serialize;
 
-pub(super) struct ImportedDocx {
-    pub(super) runs: Vec<TextRun>,
-    pub(super) paragraph_styles: Vec<ParagraphStyle>,
-    pub(super) paragraph_images: Vec<Option<DocumentImage>>,
-    pub(super) page_size: Option<PageSize>,
-    pub(super) margins: Option<PageMargins>,
+#[derive(Debug, Serialize)]
+pub struct ImportedDocx {
+    pub runs: Vec<TextRun>,
+    pub paragraph_styles: Vec<ParagraphStyle>,
+    pub paragraph_images: Vec<Option<DocumentImage>>,
+    pub page_size: Option<PageSize>,
+    pub margins: Option<PageMargins>,
 }
 
-pub(super) fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
+pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
     let cursor = Cursor::new(bytes);
     let mut archive =
         ZipArchive::new(cursor).map_err(|error| format!("invalid .docx archive: {error}"))?;

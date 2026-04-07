@@ -1,4 +1,4 @@
-mod docx;
+pub mod docx;
 mod markdown;
 mod text;
 
@@ -8,6 +8,7 @@ use eframe::egui::{
     epaint::text::{TextFormat, VariationCoords},
     Color32, FontFamily, FontId, Stroke,
 };
+use serde::Serialize;
 
 use docx::docx_to_document;
 use markdown::{
@@ -18,7 +19,7 @@ use text::{char_to_byte_index, line_char_range, slice_char_range, word_char_rang
 
 pub const OBJECT_REPLACEMENT_CHAR: char = '\u{fffc}';
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum FontChoice {
     Proportional,
     Monospace,
@@ -42,7 +43,7 @@ impl FontChoice {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum ParagraphAlignment {
     Left,
     Center,
@@ -63,7 +64,7 @@ impl ParagraphAlignment {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum ListKind {
     None,
     Bullet,
@@ -80,7 +81,11 @@ impl ListKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+fn serialize_color32<S: serde::Serializer>(color: &Color32, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&format!("#{:02x}{:02x}{:02x}{:02x}", color.r(), color.g(), color.b(), color.a()))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct CharacterStyle {
     pub bold: bool,
     pub italic: bool,
@@ -88,7 +93,9 @@ pub struct CharacterStyle {
     pub strikethrough: bool,
     pub font_size_points: f32,
     pub font_choice: FontChoice,
+    #[serde(serialize_with = "serialize_color32")]
     pub text_color: Color32,
+    #[serde(serialize_with = "serialize_color32")]
     pub highlight_color: Color32,
 }
 
@@ -107,7 +114,7 @@ impl Default for CharacterStyle {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct ParagraphStyle {
     pub alignment: ParagraphAlignment,
     pub list_kind: ListKind,
@@ -124,15 +131,16 @@ impl Default for ParagraphStyle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TextRun {
     pub text: String,
     pub style: CharacterStyle,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DocumentImage {
     pub id: usize,
+    #[serde(skip)]
     pub bytes: Vec<u8>,
     pub alt_text: String,
     pub width_points: f32,
@@ -149,13 +157,13 @@ pub struct Paragraph {
     pub image: Option<DocumentImage>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct PageSize {
     pub width_points: f32,
     pub height_points: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct PageMargins {
     pub top_points: f32,
     pub right_points: f32,

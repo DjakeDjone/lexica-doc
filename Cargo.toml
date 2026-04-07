@@ -10,4 +10,9 @@ image = { version = "0.25.8", default-features = false, features = ["bmp", "gif"
 pulldown-cmark = "0.13.0"
 quick-xml = "0.39.2"
 rfd = "0.17.2"
+serde = { version = "1", features = ["derive"] }
 zip = { version = "8.4.0", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+insta = { version = "1", features = ["yaml"] }
+walkdir = "2"

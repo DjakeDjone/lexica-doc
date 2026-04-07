@@ -1,11 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
-mod canvas;
-mod document;
-mod layout;
-
-use app::WorsApp;
+use wors::app::WorsApp;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {

@@ -510,3 +510,284 @@ fn align_paragraph_galley(
     galley.rect = egui::Rect::from_min_max(min_rect, max_rect);
     galley.mesh_bounds = mesh_bounds;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        app::CanvasState,
+        document::{
+            CharacterStyle, DocumentImage, DocumentState, ListKind, PageMargins, PageSize,
+            ParagraphAlignment, ParagraphStyle, TextRun, OBJECT_REPLACEMENT_CHAR,
+        },
+    };
+
+    /// Run `layout_document` inside a headless egui context and return
+    /// the layout result for assertion.
+    fn run_headless_layout(
+        document: &DocumentState,
+        canvas: &CanvasState,
+        wrap_width: f32,
+    ) -> DocumentLayout {
+        let ctx = egui::Context::default();
+        let mut layout = None;
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            layout = Some(layout_document(ui, document, canvas, wrap_width));
+        });
+
+        layout.expect("layout_document should have been called inside the egui frame")
+    }
+
+    fn make_document(
+        runs: Vec<TextRun>,
+        paragraph_styles: Vec<ParagraphStyle>,
+        paragraph_images: Vec<Option<DocumentImage>>,
+    ) -> DocumentState {
+        DocumentState {
+            title: "Test".to_owned(),
+            runs,
+            paragraph_styles,
+            paragraph_images,
+            page_size: PageSize::a4(),
+            margins: PageMargins::standard(),
+        }
+    }
+
+    #[test]
+    fn single_paragraph_produces_at_least_one_row() {
+        let document = make_document(
+            vec![TextRun {
+                text: "Hello world".to_owned(),
+                style: CharacterStyle::default(),
+            }],
+            vec![ParagraphStyle::default()],
+            vec![None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 600.0);
+
+        assert!(
+            !layout.galley.rows.is_empty(),
+            "galley should have at least one row"
+        );
+        assert!(
+            layout.manual_page_break_rows.is_empty(),
+            "no manual page breaks expected"
+        );
+        assert!(layout.images.is_empty(), "no images expected");
+    }
+
+    #[test]
+    fn long_text_wraps_into_multiple_rows() {
+        let long_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(20);
+        let document = make_document(
+            vec![TextRun {
+                text: long_text,
+                style: CharacterStyle::default(),
+            }],
+            vec![ParagraphStyle::default()],
+            vec![None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 300.0);
+
+        assert!(
+            layout.galley.rows.len() > 1,
+            "long text at narrow width should produce multiple rows, got {}",
+            layout.galley.rows.len()
+        );
+    }
+
+    #[test]
+    fn manual_page_break_is_recorded() {
+        let document = make_document(
+            vec![TextRun {
+                text: "First paragraph\nSecond paragraph".to_owned(),
+                style: CharacterStyle::default(),
+            }],
+            vec![
+                ParagraphStyle::default(),
+                ParagraphStyle {
+                    page_break_before: true,
+                    ..ParagraphStyle::default()
+                },
+            ],
+            vec![None, None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 600.0);
+
+        assert!(
+            !layout.manual_page_break_rows.is_empty(),
+            "should record a manual page break"
+        );
+        // The page break should be at the row index where the second paragraph starts.
+        assert!(
+            layout.manual_page_break_rows[0] > 0,
+            "page break row index should be > 0"
+        );
+    }
+
+    #[test]
+    fn block_image_paragraph_produces_image_layout() {
+        let document = make_document(
+            vec![TextRun {
+                text: format!("{OBJECT_REPLACEMENT_CHAR}"),
+                style: CharacterStyle::default(),
+            }],
+            vec![ParagraphStyle::default()],
+            vec![Some(DocumentImage {
+                id: 1,
+                bytes: vec![],
+                alt_text: "test image".to_owned(),
+                width_points: 200.0,
+                height_points: 100.0,
+            })],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 600.0);
+
+        assert_eq!(layout.images.len(), 1, "should have one image layout");
+        assert_eq!(layout.images[0].row_index, 0);
+        assert!(
+            layout.images[0].size.x > 0.0 && layout.images[0].size.y > 0.0,
+            "image size should be positive"
+        );
+    }
+
+    #[test]
+    fn centered_alignment_offsets_row_positions() {
+        let document = make_document(
+            vec![TextRun {
+                text: "Short".to_owned(),
+                style: CharacterStyle::default(),
+            }],
+            vec![ParagraphStyle {
+                alignment: ParagraphAlignment::Center,
+                ..ParagraphStyle::default()
+            }],
+            vec![None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 600.0);
+
+        assert!(!layout.galley.rows.is_empty());
+        let row = &layout.galley.rows[0];
+        // Centered text on a 600px wrap should have a positive x offset.
+        assert!(
+            row.pos.x > 0.0,
+            "centered text should be offset from left edge, got x={}",
+            row.pos.x
+        );
+    }
+
+    #[test]
+    fn multiple_paragraphs_with_varying_styles() {
+        let document = make_document(
+            vec![
+                TextRun {
+                    text: "Left aligned\nCenter aligned\nRight aligned".to_owned(),
+                    style: CharacterStyle::default(),
+                },
+            ],
+            vec![
+                ParagraphStyle {
+                    alignment: ParagraphAlignment::Left,
+                    ..ParagraphStyle::default()
+                },
+                ParagraphStyle {
+                    alignment: ParagraphAlignment::Center,
+                    ..ParagraphStyle::default()
+                },
+                ParagraphStyle {
+                    alignment: ParagraphAlignment::Right,
+                    ..ParagraphStyle::default()
+                },
+            ],
+            vec![None, None, None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 600.0);
+
+        // Should have at least 3 rows (one per paragraph).
+        assert!(
+            layout.galley.rows.len() >= 3,
+            "expected at least 3 rows for 3 paragraphs, got {}",
+            layout.galley.rows.len()
+        );
+    }
+
+    #[test]
+    fn image_with_page_break_in_multi_paragraph_document() {
+        let document = make_document(
+            vec![TextRun {
+                text: format!("Intro paragraph\n{OBJECT_REPLACEMENT_CHAR}\nClosing paragraph"),
+                style: CharacterStyle::default(),
+            }],
+            vec![
+                ParagraphStyle::default(),
+                ParagraphStyle {
+                    page_break_before: true,
+                    ..ParagraphStyle::default()
+                },
+                ParagraphStyle::default(),
+            ],
+            vec![
+                None,
+                Some(DocumentImage {
+                    id: 2,
+                    bytes: vec![],
+                    alt_text: "diagram".to_owned(),
+                    width_points: 400.0,
+                    height_points: 300.0,
+                }),
+                None,
+            ],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 600.0);
+
+        assert_eq!(layout.images.len(), 1, "should have one image");
+        assert!(
+            !layout.manual_page_break_rows.is_empty(),
+            "should have a manual page break"
+        );
+        // Image row should match the page break row.
+        assert_eq!(
+            layout.images[0].row_index, layout.manual_page_break_rows[0],
+            "image should be on the page-break row"
+        );
+    }
+
+    #[test]
+    fn list_markers_are_produced_for_bullet_paragraphs() {
+        let document = make_document(
+            vec![TextRun {
+                text: "Item one\nItem two".to_owned(),
+                style: CharacterStyle::default(),
+            }],
+            vec![
+                ParagraphStyle {
+                    list_kind: ListKind::Bullet,
+                    ..ParagraphStyle::default()
+                },
+                ParagraphStyle {
+                    list_kind: ListKind::Bullet,
+                    ..ParagraphStyle::default()
+                },
+            ],
+            vec![None, None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 600.0);
+
+        assert_eq!(
+            layout.list_markers.len(),
+            2,
+            "should have two list markers"
+        );
+        assert_eq!(layout.list_markers[0].text, "•");
+        assert_eq!(layout.list_markers[1].text, "•");
+    }
+}
