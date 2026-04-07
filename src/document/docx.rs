@@ -525,6 +525,9 @@ fn resolve_drawing(
         alt_text,
         width_points,
         height_points,
+        opacity: 1.0,
+        wrap_mode: crate::document::WrapMode::Inline,
+        rendering: crate::document::ImageRendering::Smooth,
     };
     *next_image_id += 1;
     Some(image)

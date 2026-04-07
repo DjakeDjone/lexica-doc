@@ -13,10 +13,10 @@ use eframe::egui::{
 };
 
 use crate::{
-    app::{CanvasState, ThemeMode},
+    app::{CanvasState, ImageResizeDrag, ResizeHandle, ThemeMode},
     document::{
-        text_format, CharacterStyle, DocumentImage, DocumentState, ParagraphAlignment,
-        OBJECT_REPLACEMENT_CHAR,
+        text_format, CharacterStyle, DocumentImage, DocumentState, ImageRendering,
+        ParagraphAlignment, OBJECT_REPLACEMENT_CHAR,
     },
     layout::{
         centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
@@ -77,6 +77,8 @@ pub fn paint_document_canvas(
         &document_layout.manual_page_break_rows,
     );
 
+    handle_image_interaction(ui, &response, canvas, document);
+
     handle_pointer_interaction(
         ui,
         &response,
@@ -99,6 +101,8 @@ pub fn paint_document_canvas(
             None,
         );
     }
+
+    let mut new_image_rects: Vec<(usize, Rect)> = Vec::new();
 
     for page in &page_layout.pages {
         let shadow_offset = egui::vec2(
@@ -182,11 +186,14 @@ pub fn paint_document_canvas(
             );
 
             if let Some(texture) = texture_for_image(ui.ctx(), canvas, &image.image) {
+                let tint = Color32::from_white_alpha(
+                    (image.image.opacity * 255.0).round().clamp(0.0, 255.0) as u8,
+                );
                 clipped_painter.image(
                     texture.id(),
                     image_rect,
                     Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    Color32::WHITE,
+                    tint,
                 );
             } else {
                 clipped_painter.rect_filled(image_rect, CornerRadius::same(4), palette.footer_bg);
@@ -204,10 +211,23 @@ pub fn paint_document_canvas(
                     palette.footer_text,
                 );
             }
+
+            new_image_rects.push((image.image.id, image_rect));
         }
     }
 
-    if has_focus {
+    canvas.image_rects = new_image_rects;
+
+    // Draw selection border + handles with unclipped painter so they aren't cut at page margins
+    if let Some((_, selected_rect)) = canvas
+        .image_rects
+        .iter()
+        .find(|(id, _)| Some(*id) == canvas.selected_image_id)
+    {
+        paint_image_selection(&painter, *selected_rect);
+    }
+
+    if has_focus && canvas.selected_image_id.is_none() {
         if let Some(caret_rect) =
             page_layout.caret_rect(&document_layout.galley, canvas.selection.primary)
         {
@@ -263,6 +283,168 @@ pub fn paint_document_canvas(
         footer_galley,
         palette.footer_text,
     );
+}
+
+fn resize_handle_rects(image_rect: Rect) -> [(ResizeHandle, Rect); 8] {
+    const H: f32 = 5.0;
+    let sq = |x: f32, y: f32| {
+        Rect::from_center_size(egui::pos2(x, y), egui::vec2(H * 2.0, H * 2.0))
+    };
+    let cx = image_rect.center().x;
+    let cy = image_rect.center().y;
+    [
+        (ResizeHandle::NW, sq(image_rect.left(), image_rect.top())),
+        (ResizeHandle::N, sq(cx, image_rect.top())),
+        (ResizeHandle::NE, sq(image_rect.right(), image_rect.top())),
+        (ResizeHandle::E, sq(image_rect.right(), cy)),
+        (ResizeHandle::SE, sq(image_rect.right(), image_rect.bottom())),
+        (ResizeHandle::S, sq(cx, image_rect.bottom())),
+        (ResizeHandle::SW, sq(image_rect.left(), image_rect.bottom())),
+        (ResizeHandle::W, sq(image_rect.left(), cy)),
+    ]
+}
+
+fn paint_image_selection(painter: &egui::Painter, image_rect: Rect) {
+    const SELECTION_COLOR: Color32 = Color32::from_rgb(54, 116, 206);
+    painter.rect_stroke(
+        image_rect,
+        CornerRadius::ZERO,
+        Stroke::new(2.0, SELECTION_COLOR),
+        StrokeKind::Outside,
+    );
+    for (_, handle_rect) in &resize_handle_rects(image_rect) {
+        painter.rect_filled(*handle_rect, CornerRadius::ZERO, Color32::WHITE);
+        painter.rect_stroke(
+            *handle_rect,
+            CornerRadius::ZERO,
+            Stroke::new(1.5, SELECTION_COLOR),
+            StrokeKind::Outside,
+        );
+    }
+}
+
+fn handle_image_interaction(
+    ui: &mut egui::Ui,
+    response: &egui::Response,
+    canvas: &mut CanvasState,
+    document: &mut DocumentState,
+) {
+    // Change cursor icon when hovering over a resize handle
+    if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
+        let mut cursor_icon = None;
+        'hover: for &(_, image_rect) in &canvas.image_rects {
+            for &(handle, handle_rect) in &resize_handle_rects(image_rect) {
+                if handle_rect.expand(3.0).contains(hover_pos) {
+                    cursor_icon = Some(match handle {
+                        ResizeHandle::NW | ResizeHandle::SE => egui::CursorIcon::ResizeNwSe,
+                        ResizeHandle::NE | ResizeHandle::SW => egui::CursorIcon::ResizeNeSw,
+                        ResizeHandle::N | ResizeHandle::S => egui::CursorIcon::ResizeSouth,
+                        ResizeHandle::E | ResizeHandle::W => egui::CursorIcon::ResizeEast,
+                    });
+                    break 'hover;
+                }
+            }
+        }
+        if let Some(icon) = cursor_icon {
+            ui.ctx().set_cursor_icon(icon);
+        }
+    }
+
+    // Finalize any active resize drag when mouse released
+    if !response.dragged() {
+        canvas.resize_drag = None;
+    }
+
+    // Continue active resize drag
+    if response.dragged() {
+        let drag_data = canvas.resize_drag.as_ref().map(|d| {
+            (
+                d.image_id,
+                d.handle,
+                d.start_ptr,
+                d.start_width_points,
+                d.start_height_points,
+            )
+        });
+        if let Some((image_id, handle, start_ptr, start_w, start_h)) = drag_data {
+            if let Some(pointer_pos) = response.interact_pointer_pos() {
+                let zoom = canvas.zoom;
+                let dx = (pointer_pos.x - start_ptr.x) / zoom;
+                let dy = (pointer_pos.y - start_ptr.y) / zoom;
+                let shift = ui.input(|i| i.modifiers.shift);
+                let aspect = start_h / start_w.max(1.0);
+                let (new_w, new_h) = match handle {
+                    ResizeHandle::SE => {
+                        if shift { let w = start_w + dx; (w, w * aspect) }
+                        else { (start_w + dx, start_h + dy) }
+                    }
+                    ResizeHandle::SW => {
+                        if shift { let w = start_w - dx; (w, w * aspect) }
+                        else { (start_w - dx, start_h + dy) }
+                    }
+                    ResizeHandle::NE => {
+                        if shift { let w = start_w + dx; (w, w * aspect) }
+                        else { (start_w + dx, start_h - dy) }
+                    }
+                    ResizeHandle::NW => {
+                        if shift { let w = start_w - dx; (w, w * aspect) }
+                        else { (start_w - dx, start_h - dy) }
+                    }
+                    ResizeHandle::E => (start_w + dx, start_h),
+                    ResizeHandle::W => (start_w - dx, start_h),
+                    ResizeHandle::S => (start_w, start_h + dy),
+                    ResizeHandle::N => (start_w, start_h - dy),
+                };
+                document.resize_image_by_id(image_id, new_w.max(24.0), new_h.max(24.0));
+            }
+            return;
+        }
+    }
+
+    let Some(pointer_pos) = response.interact_pointer_pos() else {
+        return;
+    };
+
+    // Start a new resize drag when dragging from a handle
+    if response.drag_started() {
+        let mut found = None;
+        'find: for &(image_id, image_rect) in &canvas.image_rects {
+            for &(handle, handle_rect) in &resize_handle_rects(image_rect) {
+                if handle_rect.expand(3.0).contains(pointer_pos) {
+                    found = Some((image_id, handle));
+                    break 'find;
+                }
+            }
+        }
+        if let Some((image_id, handle)) = found {
+            let size = document
+                .paragraph_images
+                .iter()
+                .flatten()
+                .find(|img| img.id == image_id)
+                .map(|img| (img.width_points, img.height_points));
+            if let Some((w, h)) = size {
+                canvas.resize_drag = Some(ImageResizeDrag {
+                    image_id,
+                    handle,
+                    start_ptr: pointer_pos,
+                    start_width_points: w,
+                    start_height_points: h,
+                });
+            }
+            return;
+        }
+    }
+
+    // Click on image body → select it; click elsewhere → deselect
+    if response.clicked() {
+        let hit = canvas
+            .image_rects
+            .iter()
+            .find(|(_, rect)| rect.contains(pointer_pos))
+            .map(|(id, _)| *id);
+        canvas.selected_image_id = hit;
+    }
 }
 
 fn layout_document(
@@ -446,7 +628,14 @@ fn texture_for_image<'a>(
     canvas: &'a mut CanvasState,
     image: &DocumentImage,
 ) -> Option<&'a egui::TextureHandle> {
-    match canvas.image_textures.entry(image.id) {
+    // Encode rendering mode into the cache key so smooth/crisp use separate textures
+    let cache_key = image.id * 2 + if image.rendering == ImageRendering::Crisp { 1 } else { 0 };
+    let tex_options = if image.rendering == ImageRendering::Crisp {
+        egui::TextureOptions::NEAREST
+    } else {
+        egui::TextureOptions::LINEAR
+    };
+    match canvas.image_textures.entry(cache_key) {
         Entry::Occupied(entry) => Some(entry.into_mut()),
         Entry::Vacant(entry) => {
             let decoded = ::image::load_from_memory(&image.bytes).ok()?;
@@ -455,9 +644,9 @@ fn texture_for_image<'a>(
             let color_image =
                 egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw().as_slice());
             let texture = ctx.load_texture(
-                format!("doc-image-{}", image.id),
+                format!("doc-image-{}-{}", image.id, cache_key & 1),
                 color_image,
-                egui::TextureOptions::LINEAR,
+                tex_options,
             );
             Some(entry.insert(texture))
         }

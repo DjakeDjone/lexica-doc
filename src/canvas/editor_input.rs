@@ -80,7 +80,7 @@ pub(super) fn handle_pointer_interaction(
             false
         };
 
-        if response.dragged() {
+        if response.dragged() && canvas.resize_drag.is_none() {
             canvas.selection.primary = cursor;
             canvas.selection.h_pos = None;
             canvas.active_style = document.typing_style_at(canvas.selection.primary.index);

@@ -29,6 +29,9 @@ pub(super) fn open_document(
                 canvas.zoom = 1.0;
                 canvas.pan = egui::Vec2::ZERO;
                 canvas.image_textures.clear();
+                canvas.selected_image_id = None;
+                canvas.image_rects.clear();
+                canvas.resize_drag = None;
                 *current_path = match path.extension().and_then(|ext| ext.to_str()) {
                     Some("docx") => None,
                     _ => Some(path.clone()),
@@ -146,6 +149,73 @@ pub(super) fn handle_global_shortcuts(
 ) {
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
         save_document(document, status_message, current_path);
+    }
+}
+
+pub(super) fn set_image_opacity(
+    document: &mut DocumentState,
+    image_id: usize,
+    opacity: f32,
+    status_message: &mut String,
+) {
+    document.set_image_opacity(image_id, opacity);
+    *status_message = format!("Opacity: {:.0}%", opacity * 100.0);
+}
+
+pub(super) fn set_image_wrap_mode(
+    document: &mut DocumentState,
+    image_id: usize,
+    wrap_mode: crate::document::WrapMode,
+    status_message: &mut String,
+) {
+    document.set_image_wrap_mode(image_id, wrap_mode);
+    *status_message = format!("Wrap: {}", wrap_mode.label());
+}
+
+pub(super) fn set_image_rendering(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    image_id: usize,
+    rendering: crate::document::ImageRendering,
+    status_message: &mut String,
+) {
+    document.set_image_rendering(image_id, rendering);
+    // Clear both possible cache entries for this image so texture is rebuilt
+    canvas.image_textures.remove(&(image_id * 2));
+    canvas.image_textures.remove(&(image_id * 2 + 1));
+    *status_message = match rendering {
+        crate::document::ImageRendering::Smooth => "Rendering: Smooth".to_owned(),
+        crate::document::ImageRendering::Crisp => "Rendering: Crisp".to_owned(),
+    };
+}
+
+pub(super) fn reset_image_size(
+    document: &mut DocumentState,
+    _canvas: &mut CanvasState,
+    image_id: usize,
+    status_message: &mut String,
+) {
+    let image_bytes = document
+        .paragraph_images
+        .iter()
+        .flatten()
+        .find(|img| img.id == image_id)
+        .map(|img| img.bytes.clone());
+
+    let Some(bytes) = image_bytes else {
+        return;
+    };
+
+    match image::load_from_memory(&bytes) {
+        Ok(decoded) => {
+            let w = (decoded.width() as f32 * 0.75).clamp(24.0, document.page_size.width_points);
+            let h = (decoded.height() as f32 * 0.75).clamp(24.0, document.page_size.height_points);
+            document.resize_image_by_id(image_id, w, h);
+            *status_message = format!("Image size reset to {:.0} × {:.0} pt", w, h);
+        }
+        Err(error) => {
+            *status_message = format!("Could not decode image: {error}");
+        }
     }
 }
 
@@ -288,6 +358,9 @@ fn load_image_for_document(
             .to_owned(),
         width_points,
         height_points,
+        opacity: 1.0,
+        wrap_mode: crate::document::WrapMode::Inline,
+        rendering: crate::document::ImageRendering::Smooth,
     })
 }
 

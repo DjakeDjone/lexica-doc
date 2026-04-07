@@ -137,6 +137,41 @@ pub struct TextRun {
     pub style: CharacterStyle,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum WrapMode {
+    Inline,
+    Square,
+    Tight,
+    Through,
+    TopAndBottom,
+}
+
+impl WrapMode {
+    pub const ALL: [Self; 5] = [
+        Self::Inline,
+        Self::Square,
+        Self::Tight,
+        Self::Through,
+        Self::TopAndBottom,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Inline => "Inline",
+            Self::Square => "Square",
+            Self::Tight => "Tight",
+            Self::Through => "Through",
+            Self::TopAndBottom => "Top & Bottom",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ImageRendering {
+    Smooth,
+    Crisp,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DocumentImage {
     pub id: usize,
@@ -145,6 +180,9 @@ pub struct DocumentImage {
     pub alt_text: String,
     pub width_points: f32,
     pub height_points: f32,
+    pub opacity: f32,
+    pub wrap_mode: WrapMode,
+    pub rendering: ImageRendering,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -555,6 +593,51 @@ impl DocumentState {
             .get(image_paragraph)
             .map(|paragraph| paragraph.range.end)
             .unwrap_or(insert_at)
+    }
+
+    pub fn resize_image_by_id(&mut self, id: usize, width_points: f32, height_points: f32) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.width_points = width_points.max(24.0);
+                    image.height_points = height_points.max(24.0);
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_opacity(&mut self, id: usize, opacity: f32) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.opacity = opacity.clamp(0.0, 1.0);
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_wrap_mode(&mut self, id: usize, wrap_mode: WrapMode) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.wrap_mode = wrap_mode;
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_rendering(&mut self, id: usize, rendering: ImageRendering) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.rendering = rendering;
+                    return;
+                }
+            }
+        }
     }
 
     pub fn load_from_path(path: &Path) -> Result<Self, String> {

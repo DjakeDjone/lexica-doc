@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::document::{
-    DocumentState, FontChoice, ListKind, ParagraphAlignment, OBJECT_REPLACEMENT_CHAR,
+    DocumentState, FontChoice, ImageRendering, ListKind, ParagraphAlignment, WrapMode,
+    OBJECT_REPLACEMENT_CHAR,
 };
 
 use super::{
     actions::{
-        insert_image, insert_page_break, open_document, save_document, set_font_choice,
-        set_font_size, set_highlight_color, set_paragraph_alignment, set_text_color,
+        insert_image, insert_page_break, open_document, reset_image_size, save_document,
+        set_font_choice, set_font_size, set_highlight_color, set_image_opacity,
+        set_image_rendering, set_image_wrap_mode, set_paragraph_alignment, set_text_color,
         sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
         toggle_strikethrough, toggle_underline,
     },
@@ -24,6 +26,7 @@ pub(super) enum RibbonTab {
     Design,
     Layout,
     View,
+    Picture,
 }
 
 impl RibbonTab {
@@ -42,6 +45,7 @@ impl RibbonTab {
             Self::Design => "Design",
             Self::Layout => "Layout",
             Self::View => "View",
+            Self::Picture => "Picture Format",
         }
     }
 }
@@ -97,7 +101,12 @@ pub(super) fn paint_title_bar(
         });
 }
 
-pub(super) fn paint_tab_row(ui: &mut egui::Ui, active_tab: &mut RibbonTab, palette: ThemePalette) {
+pub(super) fn paint_tab_row(
+    ui: &mut egui::Ui,
+    active_tab: &mut RibbonTab,
+    selected_image_id: Option<usize>,
+    palette: ThemePalette,
+) {
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(8, 0))
         .show(ui, |ui| {
@@ -138,6 +147,38 @@ pub(super) fn paint_tab_row(ui: &mut egui::Ui, active_tab: &mut RibbonTab, palet
                         .corner_radius(4.0);
                     if ui.add(button).clicked() {
                         *active_tab = tab;
+                    }
+                }
+
+                // Contextual "Picture Format" tab — shown only when an image is selected
+                if selected_image_id.is_some() {
+                    ui.separator();
+                    let selected = *active_tab == RibbonTab::Picture;
+                    // Gold accent colours matching Word's contextual picture tab
+                    let picture_accent = egui::Color32::from_rgb(176, 118, 0);
+                    let fg = if selected {
+                        egui::Color32::from_rgb(130, 80, 0)
+                    } else {
+                        egui::Color32::from_rgb(255, 238, 190)
+                    };
+                    let bg = if selected {
+                        egui::Color32::from_rgb(255, 242, 204)
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    let button = egui::Button::new(
+                        egui::RichText::new("Picture Format").size(13.0).color(fg).strong(),
+                    )
+                    .min_size(egui::vec2(108.0, 28.0))
+                    .fill(bg)
+                    .stroke(if selected {
+                        egui::Stroke::new(1.0, picture_accent)
+                    } else {
+                        egui::Stroke::NONE
+                    })
+                    .corner_radius(4.0);
+                    if ui.add(button).clicked() {
+                        *active_tab = RibbonTab::Picture;
                     }
                 }
             });
@@ -204,6 +245,9 @@ pub(super) fn paint_ribbon(
                         "Command+S Save, Command+B Bold, Command+I Italic, Command+U Underline",
                         palette,
                     );
+                }
+                RibbonTab::Picture => {
+                    ribbon_picture_group(ui, document, canvas, status_message, palette);
                 }
             });
         });
@@ -444,6 +488,133 @@ fn ribbon_view_group(
         ui.separator();
         if theme_switch(ui, theme_mode, palette, false) {
             *status_message = format!("Theme switched to {}", theme_mode.label());
+        }
+    });
+}
+
+fn ribbon_picture_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    palette: ThemePalette,
+) {
+    let Some(image_id) = canvas.selected_image_id else {
+        ribbon_info_group(ui, "Picture Format", "Click an image to select it.", palette);
+        return;
+    };
+
+    let image_opt = document
+        .paragraph_images
+        .iter()
+        .flatten()
+        .find(|img| img.id == image_id)
+        .cloned();
+
+    let Some(image) = image_opt else {
+        return;
+    };
+
+    ribbon_group(ui, "Size", palette, |ui| {
+        ui.label(egui::RichText::new("W:").size(11.0).color(palette.text_muted));
+        let mut width = image.width_points;
+        let aspect = image.height_points / image.width_points.max(1.0);
+        if ui
+            .add(
+                egui::DragValue::new(&mut width)
+                    .speed(1.0)
+                    .range(24.0..=1200.0)
+                    .fixed_decimals(0)
+                    .suffix(" pt"),
+            )
+            .changed()
+        {
+            let new_h = (width * aspect).max(24.0);
+            document.resize_image_by_id(image_id, width, new_h);
+            *status_message = format!("Image: {:.0} × {:.0} pt", width, new_h);
+        }
+
+        ui.label(egui::RichText::new("H:").size(11.0).color(palette.text_muted));
+        let mut height = image.height_points;
+        let aspect_inv = image.width_points / image.height_points.max(1.0);
+        if ui
+            .add(
+                egui::DragValue::new(&mut height)
+                    .speed(1.0)
+                    .range(24.0..=1200.0)
+                    .fixed_decimals(0)
+                    .suffix(" pt"),
+            )
+            .changed()
+        {
+            let new_w = (height * aspect_inv).max(24.0);
+            document.resize_image_by_id(image_id, new_w, height);
+            *status_message = format!("Image: {:.0} × {:.0} pt", new_w, height);
+        }
+    });
+
+    ribbon_group(ui, "Adjust", palette, |ui| {
+        if ui.button("Reset Size").clicked() {
+            reset_image_size(document, canvas, image_id, status_message);
+        }
+        ui.separator();
+        ui.label(
+            egui::RichText::new(format!("Alt: {}", image.alt_text))
+                .size(11.0)
+                .color(palette.text_muted),
+        );
+    });
+
+    ribbon_group(ui, "Transparency", palette, |ui| {
+        let mut opacity_pct = image.opacity * 100.0;
+        if ui
+            .add(
+                egui::DragValue::new(&mut opacity_pct)
+                    .speed(1.0)
+                    .range(0.0..=100.0)
+                    .fixed_decimals(0)
+                    .suffix("%"),
+            )
+            .changed()
+        {
+            set_image_opacity(document, image_id, opacity_pct / 100.0, status_message);
+        }
+        ui.vertical(|ui| {
+            ui.spacing_mut().slider_width = 80.0;
+            let mut opacity_val = image.opacity;
+            if ui
+                .add(egui::Slider::new(&mut opacity_val, 0.0..=1.0).show_value(false))
+                .changed()
+            {
+                set_image_opacity(document, image_id, opacity_val, status_message);
+            }
+        });
+    });
+
+    ribbon_group(ui, "Text Wrap", palette, |ui| {
+        for wrap in WrapMode::ALL {
+            let selected = image.wrap_mode == wrap;
+            if format_button(ui, selected, wrap.label(), palette)
+                .on_hover_text(wrap.label())
+                .clicked()
+            {
+                set_image_wrap_mode(document, image_id, wrap, status_message);
+            }
+        }
+    });
+
+    ribbon_group(ui, "Quality", palette, |ui| {
+        if format_button(ui, image.rendering == ImageRendering::Smooth, "Smooth", palette)
+            .on_hover_text("Bilinear filtering (smooth edges)")
+            .clicked()
+        {
+            set_image_rendering(document, canvas, image_id, ImageRendering::Smooth, status_message);
+        }
+        if format_button(ui, image.rendering == ImageRendering::Crisp, "Crisp", palette)
+            .on_hover_text("Nearest-neighbor (pixel-perfect / sharp)")
+            .clicked()
+        {
+            set_image_rendering(document, canvas, image_id, ImageRendering::Crisp, status_message);
         }
     });
 }

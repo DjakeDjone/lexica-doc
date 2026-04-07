@@ -18,6 +18,19 @@ use palette::{configure_theme, theme_palette};
 
 pub use palette::ThemeMode;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeHandle {
+    NW, N, NE, E, SE, S, SW, W,
+}
+
+pub struct ImageResizeDrag {
+    pub image_id: usize,
+    pub handle: ResizeHandle,
+    pub start_ptr: egui::Pos2,
+    pub start_width_points: f32,
+    pub start_height_points: f32,
+}
+
 pub struct CanvasState {
     pub zoom: f32,
     pub pan: egui::Vec2,
@@ -26,6 +39,9 @@ pub struct CanvasState {
     pub active_paragraph_style: ParagraphStyle,
     pub last_interaction_time: f64,
     pub image_textures: HashMap<usize, egui::TextureHandle>,
+    pub selected_image_id: Option<usize>,
+    pub image_rects: Vec<(usize, egui::Rect)>,
+    pub resize_drag: Option<ImageResizeDrag>,
 }
 
 impl Default for CanvasState {
@@ -38,6 +54,9 @@ impl Default for CanvasState {
             active_paragraph_style: ParagraphStyle::default(),
             last_interaction_time: 0.0,
             image_textures: HashMap::new(),
+            selected_image_id: None,
+            image_rects: Vec::new(),
+            resize_drag: None,
         }
     }
 }
@@ -100,7 +119,7 @@ impl App for WorsApp {
         egui::Panel::top("tabs_bar")
             .frame(egui::Frame::new().fill(palette.tab_bg))
             .show_inside(ui, |ui| {
-                paint_tab_row(ui, &mut self.active_tab, palette);
+                paint_tab_row(ui, &mut self.active_tab, self.canvas.selected_image_id, palette);
             });
 
         egui::Panel::top("ribbon")
@@ -127,6 +146,17 @@ impl App for WorsApp {
             .show_inside(ui, |ui| {
                 paint_document_canvas(ui, &mut self.document, &mut self.canvas, self.theme_mode);
             });
+
+        // Auto-switch to Picture contextual tab when an image is selected
+        match (self.canvas.selected_image_id, self.active_tab) {
+            (Some(_), tab) if tab != RibbonTab::Picture => {
+                self.active_tab = RibbonTab::Picture;
+            }
+            (None, RibbonTab::Picture) => {
+                self.active_tab = RibbonTab::Home;
+            }
+            _ => {}
+        }
 
         egui::Panel::bottom("status")
             .frame(
