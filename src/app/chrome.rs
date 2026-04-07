@@ -78,9 +78,19 @@ pub(super) fn paint_title_bar(
                     ))
                     .sense(egui::Sense::hover()),
                 );
-                ui.separator();
 
-                // Undo / Redo buttons in title bar
+                ui.label(
+                    egui::RichText::new(format!("{} - Word", document.title))
+                        .size(14.0)
+                        .color(palette.title_fg),
+                );
+                ui.label(
+                    egui::RichText::new(path_label)
+                        .size(11.0)
+                        .color(palette.title_muted),
+                );
+
+                // Undo / Redo buttons moved after filename/path (still left-aligned)
                 let can_undo = history.can_undo();
                 let can_redo = history.can_redo();
                 let undo_btn = egui::Button::new(
@@ -119,18 +129,6 @@ pub(super) fn paint_title_bar(
                         *status_target = "Redo".to_owned();
                     }
                 }
-
-                ui.separator();
-                ui.label(
-                    egui::RichText::new(format!("{} - Word", document.title))
-                        .size(14.0)
-                        .color(palette.title_fg),
-                );
-                ui.label(
-                    egui::RichText::new(path_label)
-                        .size(11.0)
-                        .color(palette.title_muted),
-                );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if theme_switch(ui, theme_mode, palette, true) {
