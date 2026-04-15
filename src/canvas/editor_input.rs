@@ -4,7 +4,10 @@ use eframe::egui::{
     self, epaint::text::cursor::CCursor, text_selection::CCursorRange, Event, Key, Modifiers,
 };
 
-use crate::{app::{CanvasState, ChangeHistory}, document::DocumentState};
+use crate::{
+    app::{CanvasState, ChangeHistory},
+    document::DocumentState,
+};
 
 use super::page_layout::PageLayout;
 
@@ -80,7 +83,7 @@ pub(super) fn handle_pointer_interaction(
             false
         };
 
-        if response.dragged() && canvas.resize_drag.is_none() {
+        if response.dragged() && canvas.resize_drag.is_none() && canvas.move_drag.is_none() {
             canvas.selection.primary = cursor;
             canvas.selection.h_pos = None;
             canvas.active_style = document.typing_style_at(canvas.selection.primary.index);

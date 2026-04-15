@@ -25,7 +25,8 @@ fn snapshot_all_docx_fixtures() {
             .and_then(|s| s.to_str())
             .unwrap_or("unknown");
 
-        let bytes = fs::read(path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let bytes =
+            fs::read(path).unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
         let imported = docx_to_document(&bytes)
             .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()));
 

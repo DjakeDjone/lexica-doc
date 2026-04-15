@@ -99,7 +99,14 @@ impl ChangeHistory {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResizeHandle {
-    NW, N, NE, E, SE, S, SW, W,
+    NW,
+    N,
+    NE,
+    E,
+    SE,
+    S,
+    SW,
+    W,
 }
 
 pub struct ImageResizeDrag {
@@ -108,6 +115,13 @@ pub struct ImageResizeDrag {
     pub start_ptr: egui::Pos2,
     pub start_width_points: f32,
     pub start_height_points: f32,
+}
+
+pub struct ImageMoveDrag {
+    pub image_id: usize,
+    pub start_ptr: egui::Pos2,
+    pub start_x_points: f32,
+    pub start_y_points: f32,
 }
 
 pub struct CanvasState {
@@ -121,6 +135,7 @@ pub struct CanvasState {
     pub selected_image_id: Option<usize>,
     pub image_rects: Vec<(usize, egui::Rect)>,
     pub resize_drag: Option<ImageResizeDrag>,
+    pub move_drag: Option<ImageMoveDrag>,
 }
 
 impl Default for CanvasState {
@@ -136,6 +151,7 @@ impl Default for CanvasState {
             selected_image_id: None,
             image_rects: Vec::new(),
             resize_drag: None,
+            move_drag: None,
         }
     }
 }
@@ -166,7 +182,8 @@ impl WorsApp {
             let rgba = img.to_rgba8();
             let size = [rgba.width() as usize, rgba.height() as usize];
             let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-            cc.egui_ctx.load_texture("app-logo", color_image, egui::TextureOptions::LINEAR)
+            cc.egui_ctx
+                .load_texture("app-logo", color_image, egui::TextureOptions::LINEAR)
         };
 
         Self {
@@ -217,7 +234,12 @@ impl App for WorsApp {
         egui::Panel::top("tabs_bar")
             .frame(egui::Frame::new().fill(palette.tab_bg))
             .show_inside(ui, |ui| {
-                paint_tab_row(ui, &mut self.active_tab, self.canvas.selected_image_id, palette);
+                paint_tab_row(
+                    ui,
+                    &mut self.active_tab,
+                    self.canvas.selected_image_id,
+                    palette,
+                );
             });
 
         egui::Panel::top("ribbon")
@@ -243,7 +265,13 @@ impl App for WorsApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(palette.workspace_bg))
             .show_inside(ui, |ui| {
-                paint_document_canvas(ui, &mut self.document, &mut self.canvas, self.theme_mode, &mut self.history);
+                paint_document_canvas(
+                    ui,
+                    &mut self.document,
+                    &mut self.canvas,
+                    self.theme_mode,
+                    &mut self.history,
+                );
             });
 
         // Auto-switch to Picture contextual tab when an image is selected

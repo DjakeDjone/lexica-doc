@@ -82,7 +82,13 @@ impl ListKind {
 }
 
 fn serialize_color32<S: serde::Serializer>(color: &Color32, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&format!("#{:02x}{:02x}{:02x}{:02x}", color.r(), color.g(), color.b(), color.a()))
+    s.serialize_str(&format!(
+        "#{:02x}{:02x}{:02x}{:02x}",
+        color.r(),
+        color.g(),
+        color.b(),
+        color.a()
+    ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -183,6 +189,8 @@ pub struct DocumentImage {
     pub opacity: f32,
     pub wrap_mode: WrapMode,
     pub rendering: ImageRendering,
+    pub offset_x_points: f32,
+    pub offset_y_points: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -602,6 +610,18 @@ impl DocumentState {
                 if image.id == id {
                     image.width_points = width_points.max(24.0);
                     image.height_points = height_points.max(24.0);
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_offset_by_id(&mut self, id: usize, x_points: f32, y_points: f32) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.offset_x_points = x_points;
+                    image.offset_y_points = y_points;
                     return;
                 }
             }
@@ -1088,8 +1108,8 @@ fn markdown_text_from_runs(runs: &[TextRun]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        plain_text_from_runs, CharacterStyle, DocumentImage, DocumentState, ListKind,
-        OBJECT_REPLACEMENT_CHAR,
+        plain_text_from_runs, CharacterStyle, DocumentImage, DocumentState, ImageRendering,
+        ListKind, WrapMode, OBJECT_REPLACEMENT_CHAR,
     };
 
     #[test]
@@ -1132,6 +1152,11 @@ mod tests {
                 alt_text: "diagram".to_owned(),
                 width_points: 120.0,
                 height_points: 60.0,
+                opacity: 1.0,
+                wrap_mode: WrapMode::Inline,
+                rendering: ImageRendering::Smooth,
+                offset_x_points: 0.0,
+                offset_y_points: 0.0,
             },
         );
         let paragraphs = document.paragraphs();

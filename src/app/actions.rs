@@ -34,6 +34,7 @@ pub(super) fn open_document(
                 canvas.selected_image_id = None;
                 canvas.image_rects.clear();
                 canvas.resize_drag = None;
+                canvas.move_drag = None;
                 *current_path = match path.extension().and_then(|ext| ext.to_str()) {
                     Some("docx") => None,
                     _ => Some(path.clone()),
@@ -132,12 +133,16 @@ pub(super) fn insert_image(
         document.delete_range(selected);
     }
 
+    let image_id = image.id;
     let cursor_index = document.insert_image(insert_at, image);
     canvas.selection = egui::text_selection::CCursorRange::one(
         egui::epaint::text::cursor::CCursor::new(cursor_index),
     );
     canvas.active_style = document.typing_style_at(cursor_index);
     canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+    canvas.selected_image_id = Some(image_id);
+    canvas.resize_drag = None;
+    canvas.move_drag = None;
     canvas.image_textures.clear();
     *status_message = format!(
         "Inserted {}",
@@ -169,7 +174,12 @@ pub(super) fn handle_global_shortcuts(
             *status_message = "Undo".to_owned();
         }
     }
-    if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z)) {
+    if ui.input_mut(|input| {
+        input.consume_key(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::Z,
+        )
+    }) {
         if history.redo(document) {
             canvas.image_textures.clear();
             *status_message = "Redo".to_owned();
@@ -260,25 +270,41 @@ pub(super) fn reset_image_size(
     }
 }
 
-pub(super) fn toggle_bold(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+pub(super) fn toggle_bold(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+) {
     history.checkpoint(document, f64::NAN);
     let next_value = !canvas.active_style.bold;
     apply_selection_or_active_style(document, canvas, move |style| style.bold = next_value);
 }
 
-pub(super) fn toggle_italic(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+pub(super) fn toggle_italic(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+) {
     history.checkpoint(document, f64::NAN);
     let next_value = !canvas.active_style.italic;
     apply_selection_or_active_style(document, canvas, move |style| style.italic = next_value);
 }
 
-pub(super) fn toggle_underline(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+pub(super) fn toggle_underline(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+) {
     history.checkpoint(document, f64::NAN);
     let next_value = !canvas.active_style.underline;
     apply_selection_or_active_style(document, canvas, move |style| style.underline = next_value);
 }
 
-pub(super) fn toggle_strikethrough(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+pub(super) fn toggle_strikethrough(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+) {
     history.checkpoint(document, f64::NAN);
     let next_value = !canvas.active_style.strikethrough;
     apply_selection_or_active_style(document, canvas, move |style| {
@@ -356,7 +382,11 @@ pub(super) fn set_paragraph_alignment(
     });
 }
 
-pub(super) fn toggle_bullet_list(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+pub(super) fn toggle_bullet_list(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+) {
     history.checkpoint(document, f64::NAN);
     let next = if canvas.active_paragraph_style.list_kind == ListKind::Bullet {
         ListKind::None
@@ -366,7 +396,11 @@ pub(super) fn toggle_bullet_list(document: &mut DocumentState, canvas: &mut Canv
     apply_selection_or_current_paragraph(document, canvas, move |style| style.list_kind = next);
 }
 
-pub(super) fn toggle_ordered_list(document: &mut DocumentState, canvas: &mut CanvasState, history: &mut ChangeHistory) {
+pub(super) fn toggle_ordered_list(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+) {
     history.checkpoint(document, f64::NAN);
     let next = if canvas.active_paragraph_style.list_kind == ListKind::Ordered {
         ListKind::None
@@ -421,6 +455,8 @@ fn load_image_for_document(
         opacity: 1.0,
         wrap_mode: crate::document::WrapMode::Inline,
         rendering: crate::document::ImageRendering::Smooth,
+        offset_x_points: 0.0,
+        offset_y_points: 0.0,
     })
 }
 

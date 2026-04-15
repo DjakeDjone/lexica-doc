@@ -13,10 +13,12 @@ use eframe::egui::{
 };
 
 use crate::{
-    app::{CanvasState, ChangeHistory, ImageResizeDrag, ResizeHandle, ThemeMode},
+    app::{
+        CanvasState, ChangeHistory, ImageMoveDrag, ImageResizeDrag, ResizeHandle, ThemeMode,
+    },
     document::{
         text_format, CharacterStyle, DocumentImage, DocumentState, ImageRendering,
-        ParagraphAlignment, OBJECT_REPLACEMENT_CHAR,
+        ParagraphAlignment, WrapMode, OBJECT_REPLACEMENT_CHAR,
     },
     layout::{
         centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
@@ -35,6 +37,21 @@ struct DocumentLayout {
     manual_page_break_rows: Vec<usize>,
 }
 
+struct ActiveTightWrapFlow {
+    pending_top_height: f32,
+    remaining_height: f32,
+    text_start_x: f32,
+    text_width: f32,
+}
+
+struct TightWrapZone {
+    row_index: usize,
+    top: f32,
+    bottom: f32,
+    text_start_x: f32,
+    text_width: f32,
+}
+
 struct ListMarkerLayout {
     row_index: usize,
     text: String,
@@ -46,6 +63,7 @@ struct ListMarkerLayout {
 struct ImageLayout {
     row_index: usize,
     size: egui::Vec2,
+    offset: egui::Vec2,
     image: DocumentImage,
 }
 
@@ -76,17 +94,6 @@ pub fn paint_document_canvas(
         canvas,
         &document_layout.galley,
         &document_layout.manual_page_break_rows,
-    );
-
-    handle_image_interaction(ui, &response, canvas, document);
-
-    handle_pointer_interaction(
-        ui,
-        &response,
-        &page_layout,
-        &document_layout.galley,
-        canvas,
-        document,
     );
 
     let has_focus = ui.memory(|mem| mem.has_focus(editor_id));
@@ -146,7 +153,8 @@ pub fn paint_document_canvas(
             Color32::BLACK,
         );
 
-        let clipped_painter = painter.with_clip_rect(visible_content_rect);
+            let clipped_painter = painter.with_clip_rect(visible_content_rect);
+            let page_clipped_painter = painter.with_clip_rect(page.page_rect);
         for marker in &document_layout.list_markers {
             let Some(row) = document_layout.galley.rows.get(marker.row_index) else {
                 continue;
@@ -180,8 +188,15 @@ pub fn paint_document_canvas(
 
             let image_rect = Rect::from_min_size(
                 egui::pos2(
-                    page.content_rect.left() + row.pos.x,
-                    page.content_rect.top() + image_y - page.start_y,
+                    page.content_rect.left()
+                        + row.pos.x
+                        + image.offset.x
+                        + document_points_to_screen_points(image.image.offset_x_points, canvas.zoom),
+                    page.content_rect.top()
+                        + image_y
+                        - page.start_y
+                        + image.offset.y
+                        + document_points_to_screen_points(image.image.offset_y_points, canvas.zoom),
                 ),
                 image.size,
             );
@@ -190,21 +205,21 @@ pub fn paint_document_canvas(
                 let tint = Color32::from_white_alpha(
                     (image.image.opacity * 255.0).round().clamp(0.0, 255.0) as u8,
                 );
-                clipped_painter.image(
+                page_clipped_painter.image(
                     texture.id(),
                     image_rect,
                     Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                     tint,
                 );
             } else {
-                clipped_painter.rect_filled(image_rect, CornerRadius::same(4), palette.footer_bg);
-                clipped_painter.rect_stroke(
+                page_clipped_painter.rect_filled(image_rect, CornerRadius::same(4), palette.footer_bg);
+                page_clipped_painter.rect_stroke(
                     image_rect,
                     CornerRadius::same(4),
                     Stroke::new(1.0, palette.footer_stroke),
                     StrokeKind::Outside,
                 );
-                clipped_painter.text(
+                page_clipped_painter.text(
                     image_rect.center(),
                     Align2::CENTER_CENTER,
                     &image.image.alt_text,
@@ -218,6 +233,18 @@ pub fn paint_document_canvas(
     }
 
     canvas.image_rects = new_image_rects;
+    let image_pointer_captured = handle_image_interaction(ui, &response, canvas, document);
+
+    if !image_pointer_captured {
+        handle_pointer_interaction(
+            ui,
+            &response,
+            &page_layout,
+            &document_layout.galley,
+            canvas,
+            document,
+        );
+    }
 
     // Draw selection border + handles with unclipped painter so they aren't cut at page margins
     if let Some((_, selected_rect)) = canvas
@@ -288,9 +315,8 @@ pub fn paint_document_canvas(
 
 fn resize_handle_rects(image_rect: Rect) -> [(ResizeHandle, Rect); 8] {
     const H: f32 = 5.0;
-    let sq = |x: f32, y: f32| {
-        Rect::from_center_size(egui::pos2(x, y), egui::vec2(H * 2.0, H * 2.0))
-    };
+    let sq =
+        |x: f32, y: f32| Rect::from_center_size(egui::pos2(x, y), egui::vec2(H * 2.0, H * 2.0));
     let cx = image_rect.center().x;
     let cy = image_rect.center().y;
     [
@@ -298,7 +324,10 @@ fn resize_handle_rects(image_rect: Rect) -> [(ResizeHandle, Rect); 8] {
         (ResizeHandle::N, sq(cx, image_rect.top())),
         (ResizeHandle::NE, sq(image_rect.right(), image_rect.top())),
         (ResizeHandle::E, sq(image_rect.right(), cy)),
-        (ResizeHandle::SE, sq(image_rect.right(), image_rect.bottom())),
+        (
+            ResizeHandle::SE,
+            sq(image_rect.right(), image_rect.bottom()),
+        ),
         (ResizeHandle::S, sq(cx, image_rect.bottom())),
         (ResizeHandle::SW, sq(image_rect.left(), image_rect.bottom())),
         (ResizeHandle::W, sq(image_rect.left(), cy)),
@@ -329,31 +358,41 @@ fn handle_image_interaction(
     response: &egui::Response,
     canvas: &mut CanvasState,
     document: &mut DocumentState,
-) {
+) -> bool {
+    const HANDLE_HIT_PADDING: f32 = 6.0;
+
+    if response.clicked() || response.drag_started() {
+        response.request_focus();
+    }
+
     // Change cursor icon when hovering over a resize handle
     if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
         let mut cursor_icon = None;
-        'hover: for &(_, image_rect) in &canvas.image_rects {
-            for &(handle, handle_rect) in &resize_handle_rects(image_rect) {
-                if handle_rect.expand(3.0).contains(hover_pos) {
-                    cursor_icon = Some(match handle {
-                        ResizeHandle::NW | ResizeHandle::SE => egui::CursorIcon::ResizeNwSe,
-                        ResizeHandle::NE | ResizeHandle::SW => egui::CursorIcon::ResizeNeSw,
-                        ResizeHandle::N | ResizeHandle::S => egui::CursorIcon::ResizeSouth,
-                        ResizeHandle::E | ResizeHandle::W => egui::CursorIcon::ResizeEast,
-                    });
-                    break 'hover;
-                }
-            }
+        if let Some((_, handle)) = image_handle_hit(canvas, hover_pos, HANDLE_HIT_PADDING) {
+            cursor_icon = Some(match handle {
+                ResizeHandle::NW | ResizeHandle::SE => egui::CursorIcon::ResizeNwSe,
+                ResizeHandle::NE | ResizeHandle::SW => egui::CursorIcon::ResizeNeSw,
+                ResizeHandle::N | ResizeHandle::S => egui::CursorIcon::ResizeSouth,
+                ResizeHandle::E | ResizeHandle::W => egui::CursorIcon::ResizeEast,
+            });
+        }
+        if cursor_icon.is_none()
+            && canvas
+                .image_rects
+                .iter()
+                .any(|(_, rect)| rect.contains(hover_pos))
+        {
+            cursor_icon = Some(egui::CursorIcon::Grab);
         }
         if let Some(icon) = cursor_icon {
             ui.ctx().set_cursor_icon(icon);
         }
     }
 
-    // Finalize any active resize drag when mouse released
+    // Finalize any active image drag when mouse released
     if !response.dragged() {
         canvas.resize_drag = None;
+        canvas.move_drag = None;
     }
 
     // Continue active resize drag
@@ -376,20 +415,36 @@ fn handle_image_interaction(
                 let aspect = start_h / start_w.max(1.0);
                 let (new_w, new_h) = match handle {
                     ResizeHandle::SE => {
-                        if shift { let w = start_w + dx; (w, w * aspect) }
-                        else { (start_w + dx, start_h + dy) }
+                        if shift {
+                            let w = start_w + dx;
+                            (w, w * aspect)
+                        } else {
+                            (start_w + dx, start_h + dy)
+                        }
                     }
                     ResizeHandle::SW => {
-                        if shift { let w = start_w - dx; (w, w * aspect) }
-                        else { (start_w - dx, start_h + dy) }
+                        if shift {
+                            let w = start_w - dx;
+                            (w, w * aspect)
+                        } else {
+                            (start_w - dx, start_h + dy)
+                        }
                     }
                     ResizeHandle::NE => {
-                        if shift { let w = start_w + dx; (w, w * aspect) }
-                        else { (start_w + dx, start_h - dy) }
+                        if shift {
+                            let w = start_w + dx;
+                            (w, w * aspect)
+                        } else {
+                            (start_w + dx, start_h - dy)
+                        }
                     }
                     ResizeHandle::NW => {
-                        if shift { let w = start_w - dx; (w, w * aspect) }
-                        else { (start_w - dx, start_h - dy) }
+                        if shift {
+                            let w = start_w - dx;
+                            (w, w * aspect)
+                        } else {
+                            (start_w - dx, start_h - dy)
+                        }
                     }
                     ResizeHandle::E => (start_w + dx, start_h),
                     ResizeHandle::W => (start_w - dx, start_h),
@@ -398,26 +453,33 @@ fn handle_image_interaction(
                 };
                 document.resize_image_by_id(image_id, new_w.max(24.0), new_h.max(24.0));
             }
-            return;
+            return true;
+        }
+
+        let move_data = canvas
+            .move_drag
+            .as_ref()
+            .map(|d| (d.image_id, d.start_ptr, d.start_x_points, d.start_y_points));
+        if let Some((image_id, start_ptr, start_x, start_y)) = move_data {
+            if let Some(pointer_pos) = response.interact_pointer_pos() {
+                let zoom = canvas.zoom.max(0.01);
+                let dx = (pointer_pos.x - start_ptr.x) / zoom;
+                let dy = (pointer_pos.y - start_ptr.y) / zoom;
+                document.set_image_offset_by_id(image_id, start_x + dx, start_y + dy);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
+            return true;
         }
     }
 
     let Some(pointer_pos) = response.interact_pointer_pos() else {
-        return;
+        return false;
     };
 
     // Start a new resize drag when dragging from a handle
     if response.drag_started() {
-        let mut found = None;
-        'find: for &(image_id, image_rect) in &canvas.image_rects {
-            for &(handle, handle_rect) in &resize_handle_rects(image_rect) {
-                if handle_rect.expand(3.0).contains(pointer_pos) {
-                    found = Some((image_id, handle));
-                    break 'find;
-                }
-            }
-        }
-        if let Some((image_id, handle)) = found {
+        if let Some((image_id, handle)) = image_handle_hit(canvas, pointer_pos, HANDLE_HIT_PADDING)
+        {
             let size = document
                 .paragraph_images
                 .iter()
@@ -425,6 +487,8 @@ fn handle_image_interaction(
                 .find(|img| img.id == image_id)
                 .map(|img| (img.width_points, img.height_points));
             if let Some((w, h)) = size {
+                canvas.selected_image_id = Some(image_id);
+                canvas.move_drag = None;
                 canvas.resize_drag = Some(ImageResizeDrag {
                     image_id,
                     handle,
@@ -433,8 +497,41 @@ fn handle_image_interaction(
                     start_height_points: h,
                 });
             }
-            return;
+            return true;
         }
+
+        if let Some((image_id, image_rect)) = selected_image_rect(canvas) {
+            if image_rect.contains(pointer_pos) {
+                let offset = document
+                    .paragraph_images
+                    .iter()
+                    .flatten()
+                    .find(|img| img.id == image_id)
+                    .map(|img| (img.offset_x_points, img.offset_y_points))
+                    .unwrap_or((0.0, 0.0));
+                canvas.resize_drag = None;
+                canvas.move_drag = Some(ImageMoveDrag {
+                    image_id,
+                    start_ptr: pointer_pos,
+                    start_x_points: offset.0,
+                    start_y_points: offset.1,
+                });
+                return true;
+            }
+        }
+
+        if let Some(image_id) = canvas
+            .image_rects
+            .iter()
+            .find(|(_, rect)| rect.contains(pointer_pos))
+            .map(|(id, _)| *id)
+        {
+            canvas.selected_image_id = Some(image_id);
+            canvas.resize_drag = None;
+            canvas.move_drag = None;
+            return true;
+        }
+
     }
 
     // Click on image body → select it; click elsewhere → deselect
@@ -445,7 +542,51 @@ fn handle_image_interaction(
             .find(|(_, rect)| rect.contains(pointer_pos))
             .map(|(id, _)| *id);
         canvas.selected_image_id = hit;
+        if hit.is_none() {
+            canvas.resize_drag = None;
+            canvas.move_drag = None;
+            return false;
+        }
+        return true;
     }
+
+    false
+}
+
+fn selected_image_rect(canvas: &CanvasState) -> Option<(usize, Rect)> {
+    let selected_id = canvas.selected_image_id?;
+    canvas
+        .image_rects
+        .iter()
+        .find(|(id, _)| *id == selected_id)
+        .copied()
+}
+
+fn image_handle_hit(
+    canvas: &CanvasState,
+    pointer_pos: egui::Pos2,
+    padding: f32,
+) -> Option<(usize, ResizeHandle)> {
+    if let Some((image_id, image_rect)) = selected_image_rect(canvas) {
+        for &(handle, handle_rect) in &resize_handle_rects(image_rect) {
+            if handle_rect.expand(padding).contains(pointer_pos) {
+                return Some((image_id, handle));
+            }
+        }
+    }
+
+    for &(image_id, image_rect) in canvas.image_rects.iter().rev() {
+        if Some(image_id) == canvas.selected_image_id {
+            continue;
+        }
+        for &(handle, handle_rect) in &resize_handle_rects(image_rect) {
+            if handle_rect.expand(padding).contains(pointer_pos) {
+                return Some((image_id, handle));
+            }
+        }
+    }
+
+    None
 }
 
 fn layout_document(
@@ -464,14 +605,32 @@ fn layout_document(
     let mut images = Vec::new();
     let mut manual_page_break_rows = Vec::new();
     let mut row_index = 0usize;
+    let mut tight_wrap_flow: Option<ActiveTightWrapFlow> = None;
 
     for paragraph in document.paragraphs() {
-        let indent = if paragraph.list_marker.is_some() {
+        if tight_wrap_flow
+            .as_ref()
+            .is_some_and(|flow| flow.remaining_height <= 0.0)
+        {
+            tight_wrap_flow = None;
+        }
+
+        let base_indent = if paragraph.list_marker.is_some() {
             marker_gutter
         } else {
             0.0
         };
-        let paragraph_wrap_width = (wrap_width - indent).max(1.0);
+        let (indent, paragraph_wrap_width) = tight_wrap_flow
+            .as_ref()
+            .filter(|flow| flow.pending_top_height <= 0.0)
+            .map_or_else(
+                || (base_indent, (wrap_width - base_indent).max(1.0)),
+                |flow| {
+                    let start_x = flow.text_start_x.max(base_indent).clamp(0.0, wrap_width);
+                    let end_x = (flow.text_start_x + flow.text_width).clamp(start_x, wrap_width);
+                    (start_x, (end_x - start_x).max(1.0))
+                },
+            );
         let mut job = egui::epaint::text::LayoutJob::default();
         job.wrap.max_width = paragraph_wrap_width;
         job.break_on_newline = true;
@@ -507,14 +666,36 @@ fn layout_document(
             manual_page_break_rows.push(row_index);
         }
 
+        let mut tight_wrap_image_spec: Option<(f32, f32, f32, f32)> = None;
         if let Some(image) = paragraph.image.clone().filter(|_| !has_visible_text) {
+            let wrap_mode = image.wrap_mode;
+            let image_offset_x_points = image.offset_x_points;
+            let image_offset_y_points = image.offset_y_points;
             let display_size = image_display_size(&image, paragraph_wrap_width, canvas.zoom);
-            if reserve_block_image_space(&mut paragraph_galley, display_size) {
+            let reservation = block_image_reservation(
+                wrap_mode,
+                display_size,
+                paragraph_wrap_width,
+                canvas.zoom,
+            );
+            if reserve_block_image_space(&mut paragraph_galley, reservation.row_size) {
                 images.push(ImageLayout {
                     row_index,
                     size: display_size,
+                    offset: reservation.image_offset,
                     image,
                 });
+            }
+
+            if wrap_mode == WrapMode::Tight {
+                tight_wrap_image_spec = Some((
+                    display_size.x,
+                    display_size.y,
+                    reservation.image_offset.x
+                        + document_points_to_screen_points(image_offset_x_points, canvas.zoom),
+                    reservation.image_offset.y
+                        + document_points_to_screen_points(image_offset_y_points, canvas.zoom),
+                ));
             }
         }
         align_paragraph_galley(
@@ -524,6 +705,45 @@ fn layout_document(
             paragraph.style.alignment,
         );
 
+        if let Some((image_width, image_height, image_offset_x, image_offset_y)) =
+            tight_wrap_image_spec
+        {
+            let tight_pad = tight_wrap_pad(canvas.zoom);
+            let image_row_x = paragraph_galley
+                .rows
+                .first()
+                .map(|row| row.pos.x)
+                .unwrap_or(indent);
+            let image_left = image_row_x + image_offset_x;
+            let image_right = image_left + image_width;
+            let left_width = (image_left - tight_pad).max(0.0);
+            let right_start = (image_right + tight_pad).clamp(0.0, wrap_width);
+            let right_width = (wrap_width - right_start).max(0.0);
+            let min_side_width = document_points_to_screen_points(72.0, canvas.zoom);
+
+            let (text_start_x, text_width) = if right_width >= left_width {
+                (right_start, right_width)
+            } else {
+                (0.0, left_width)
+            };
+
+            let zone_top = image_offset_y - tight_pad;
+            let zone_bottom = image_offset_y + image_height + tight_pad;
+            let pending_top_height = zone_top.max(0.0);
+            let remaining_height = (zone_bottom - pending_top_height).max(0.0);
+
+            if text_width >= min_side_width && remaining_height > 0.0 {
+                tight_wrap_flow = Some(ActiveTightWrapFlow {
+                    pending_top_height,
+                    remaining_height,
+                    text_start_x,
+                    text_width,
+                });
+            } else {
+                tight_wrap_flow = None;
+            }
+        }
+
         if let Some(marker_text) = paragraph.list_marker {
             list_markers.push(ListMarkerLayout {
                 row_index,
@@ -532,6 +752,17 @@ fn layout_document(
                 font_id: text_format(marker_style, canvas.zoom).font_id,
                 color: marker_style.text_color,
             });
+        }
+
+        if let Some(flow) = tight_wrap_flow.as_mut() {
+            let paragraph_height = paragraph_galley.rect.height().max(0.0);
+            if flow.pending_top_height > 0.0 {
+                let consumed_top = paragraph_height.min(flow.pending_top_height);
+                flow.pending_top_height -= consumed_top;
+                flow.remaining_height -= (paragraph_height - consumed_top).max(0.0);
+            } else {
+                flow.remaining_height -= paragraph_height;
+            }
         }
 
         row_index += paragraph_galley.rows.len();
@@ -544,12 +775,15 @@ fn layout_document(
     merged_job.break_on_newline = true;
     merged_job.append(&plain_text, 0.0, text_format(default_style, canvas.zoom));
 
+    let mut galley = Arc::new(egui::Galley::concat(
+        Arc::new(merged_job),
+        &paragraph_galleys,
+        painter.pixels_per_point(),
+    ));
+    apply_tight_wrap_row_offsets(&mut galley, &images, canvas.zoom);
+
     DocumentLayout {
-        galley: Arc::new(egui::Galley::concat(
-            Arc::new(merged_job),
-            &paragraph_galleys,
-            painter.pixels_per_point(),
-        )),
+        galley,
         list_markers,
         images,
         manual_page_break_rows,
@@ -589,7 +823,141 @@ fn append_run_with_placeholders(
     }
 }
 
-fn reserve_block_image_space(galley: &mut Arc<egui::Galley>, size: egui::Vec2) -> bool {
+struct BlockImageReservation {
+    row_size: egui::Vec2,
+    image_offset: egui::Vec2,
+}
+
+fn block_image_reservation(
+    wrap_mode: WrapMode,
+    image_size: egui::Vec2,
+    wrap_width: f32,
+    zoom: f32,
+) -> BlockImageReservation {
+    let square_pad = document_points_to_screen_points(12.0, zoom);
+    let tight_pad = document_points_to_screen_points(4.0, zoom);
+
+    match wrap_mode {
+        WrapMode::Inline => BlockImageReservation {
+            row_size: image_size,
+            image_offset: egui::Vec2::ZERO,
+        },
+        WrapMode::Square => {
+            let row_width = (image_size.x + square_pad * 2.0).min(wrap_width);
+            let row_height = image_size.y + square_pad * 2.0;
+            BlockImageReservation {
+                row_size: egui::vec2(row_width, row_height),
+                image_offset: egui::vec2(((row_width - image_size.x) * 0.5).max(0.0), square_pad),
+            }
+        }
+        WrapMode::Tight => {
+            let row_width = (image_size.x + tight_pad * 2.0).min(wrap_width);
+            let row_height = tight_wrap_row_height(zoom);
+            BlockImageReservation {
+                row_size: egui::vec2(row_width, row_height),
+                image_offset: egui::vec2(tight_pad, 0.0),
+            }
+        }
+        WrapMode::Through => BlockImageReservation {
+            row_size: egui::Vec2::ZERO,
+            image_offset: egui::Vec2::ZERO,
+        },
+        WrapMode::TopAndBottom => BlockImageReservation {
+            row_size: egui::vec2(wrap_width, image_size.y),
+            image_offset: egui::vec2(((wrap_width - image_size.x) * 0.5).max(0.0), 0.0),
+        },
+    }
+}
+
+fn tight_wrap_pad(zoom: f32) -> f32 {
+    document_points_to_screen_points(4.0, zoom)
+}
+
+fn tight_wrap_row_height(zoom: f32) -> f32 {
+    document_points_to_screen_points(14.0, zoom).max(1.0)
+}
+
+fn apply_tight_wrap_row_offsets(
+    galley: &mut Arc<egui::Galley>,
+    images: &[ImageLayout],
+    zoom: f32,
+) {
+    let zones = tight_wrap_zones(galley, images, zoom);
+    if zones.is_empty() {
+        return;
+    }
+
+    let galley = Arc::make_mut(galley);
+    let mut min_rect = galley.rect.min;
+    let mut max_rect = galley.rect.max;
+    let mut mesh_bounds = egui::Rect::NOTHING;
+
+    for (index, row) in galley.rows.iter_mut().enumerate() {
+        let row_text = row.row.text();
+        if !row_text.chars().all(|ch| ch == OBJECT_REPLACEMENT_CHAR) {
+            if let Some(zone) = zones.iter().find(|zone| {
+                zone.row_index != index && row.max_y() > zone.top && row.min_y() < zone.bottom
+            }) {
+                if row.row.size.x <= zone.text_width {
+                    row.pos.x = zone.text_start_x;
+                }
+            }
+        }
+
+        let row_rect = row.rect();
+        min_rect.x = min_rect.x.min(row_rect.min.x);
+        min_rect.y = min_rect.y.min(row_rect.min.y);
+        max_rect.x = max_rect.x.max(row_rect.max.x);
+        max_rect.y = max_rect.y.max(row_rect.max.y);
+        mesh_bounds |= row.visuals.mesh_bounds.translate(row.pos.to_vec2());
+    }
+
+    galley.rect = Rect::from_min_max(min_rect, max_rect);
+    galley.mesh_bounds = mesh_bounds;
+}
+
+fn tight_wrap_zones(galley: &egui::Galley, images: &[ImageLayout], zoom: f32) -> Vec<TightWrapZone> {
+    let tight_pad = tight_wrap_pad(zoom);
+    let min_side_width = document_points_to_screen_points(72.0, zoom);
+    let mut zones = Vec::new();
+
+    for image in images.iter().filter(|image| image.image.wrap_mode == WrapMode::Tight) {
+        let Some(row) = galley.rows.get(image.row_index) else {
+            continue;
+        };
+
+        let image_left = row.pos.x
+            + image.offset.x
+            + document_points_to_screen_points(image.image.offset_x_points, zoom);
+        let image_top = row.pos.y
+            + image.offset.y
+            + document_points_to_screen_points(image.image.offset_y_points, zoom);
+        let image_right = image_left + image.size.x;
+        let image_bottom = image_top + image.size.y;
+        let left_width = (image_left - tight_pad).max(0.0);
+        let right_start = (image_right + tight_pad).max(0.0);
+        let right_width = (galley.rect.width() - right_start).max(0.0);
+        let (text_start_x, text_width) = if right_width >= left_width {
+            (right_start, right_width)
+        } else {
+            (0.0, left_width)
+        };
+
+        if text_width >= min_side_width {
+            zones.push(TightWrapZone {
+                row_index: image.row_index,
+                top: image_top - tight_pad,
+                bottom: image_bottom + tight_pad,
+                text_start_x,
+                text_width,
+            });
+        }
+    }
+
+    zones
+}
+
+fn reserve_block_image_space(galley: &mut Arc<egui::Galley>, row_size: egui::Vec2) -> bool {
     let galley = Arc::make_mut(galley);
     let Some(placed_row) = galley.rows.first_mut() else {
         return false;
@@ -599,16 +967,16 @@ fn reserve_block_image_space(galley: &mut Arc<egui::Galley>, size: egui::Vec2) -
         return false;
     }
 
-    row.glyphs[0].advance_width = size.x;
-    row.glyphs[0].line_height = size.y;
-    row.glyphs[0].font_ascent = size.y;
-    row.glyphs[0].font_height = size.y;
-    row.glyphs[0].font_face_ascent = size.y;
-    row.glyphs[0].font_face_height = size.y;
-    row.size = size;
+    row.glyphs[0].advance_width = row_size.x;
+    row.glyphs[0].line_height = row_size.y;
+    row.glyphs[0].font_ascent = row_size.y;
+    row.glyphs[0].font_height = row_size.y;
+    row.glyphs[0].font_face_ascent = row_size.y;
+    row.glyphs[0].font_face_height = row_size.y;
+    row.size = row_size;
     row.visuals = Default::default();
 
-    galley.rect = Rect::from_min_size(galley.rect.min, size);
+    galley.rect = Rect::from_min_size(galley.rect.min, row_size);
     galley.mesh_bounds = Rect::NOTHING;
     true
 }
@@ -630,7 +998,12 @@ fn texture_for_image<'a>(
     image: &DocumentImage,
 ) -> Option<&'a egui::TextureHandle> {
     // Encode rendering mode into the cache key so smooth/crisp use separate textures
-    let cache_key = image.id * 2 + if image.rendering == ImageRendering::Crisp { 1 } else { 0 };
+    let cache_key = image.id * 2
+        + if image.rendering == ImageRendering::Crisp {
+            1
+        } else {
+            0
+        };
     let tex_options = if image.rendering == ImageRendering::Crisp {
         egui::TextureOptions::NEAREST
     } else {
@@ -707,8 +1080,9 @@ mod tests {
     use crate::{
         app::CanvasState,
         document::{
-            CharacterStyle, DocumentImage, DocumentState, ListKind, PageMargins, PageSize,
-            ParagraphAlignment, ParagraphStyle, TextRun, OBJECT_REPLACEMENT_CHAR,
+            CharacterStyle, DocumentImage, DocumentState, ImageRendering, ListKind, PageMargins,
+            PageSize, ParagraphAlignment, ParagraphStyle, TextRun, WrapMode,
+            OBJECT_REPLACEMENT_CHAR,
         },
     };
 
@@ -833,6 +1207,11 @@ mod tests {
                 alt_text: "test image".to_owned(),
                 width_points: 200.0,
                 height_points: 100.0,
+                opacity: 1.0,
+                wrap_mode: WrapMode::Inline,
+                rendering: ImageRendering::Smooth,
+                offset_x_points: 0.0,
+                offset_y_points: 0.0,
             })],
         );
         let canvas = CanvasState::default();
@@ -875,12 +1254,10 @@ mod tests {
     #[test]
     fn multiple_paragraphs_with_varying_styles() {
         let document = make_document(
-            vec![
-                TextRun {
-                    text: "Left aligned\nCenter aligned\nRight aligned".to_owned(),
-                    style: CharacterStyle::default(),
-                },
-            ],
+            vec![TextRun {
+                text: "Left aligned\nCenter aligned\nRight aligned".to_owned(),
+                style: CharacterStyle::default(),
+            }],
             vec![
                 ParagraphStyle {
                     alignment: ParagraphAlignment::Left,
@@ -931,6 +1308,11 @@ mod tests {
                     alt_text: "diagram".to_owned(),
                     width_points: 400.0,
                     height_points: 300.0,
+                    opacity: 1.0,
+                    wrap_mode: WrapMode::Inline,
+                    rendering: ImageRendering::Smooth,
+                    offset_x_points: 0.0,
+                    offset_y_points: 0.0,
                 }),
                 None,
             ],
@@ -972,12 +1354,160 @@ mod tests {
         let canvas = CanvasState::default();
         let layout = run_headless_layout(&document, &canvas, 600.0);
 
-        assert_eq!(
-            layout.list_markers.len(),
-            2,
-            "should have two list markers"
-        );
+        assert_eq!(layout.list_markers.len(), 2, "should have two list markers");
         assert_eq!(layout.list_markers[0].text, "•");
         assert_eq!(layout.list_markers[1].text, "•");
+    }
+
+    #[test]
+    fn wrap_modes_change_image_row_geometry() {
+        let make_doc = |wrap_mode| {
+            make_document(
+                vec![TextRun {
+                    text: format!("{OBJECT_REPLACEMENT_CHAR}"),
+                    style: CharacterStyle::default(),
+                }],
+                vec![ParagraphStyle::default()],
+                vec![Some(DocumentImage {
+                    id: 10,
+                    bytes: vec![],
+                    alt_text: "wrapped".to_owned(),
+                    width_points: 180.0,
+                    height_points: 90.0,
+                    opacity: 1.0,
+                    wrap_mode,
+                    rendering: ImageRendering::Smooth,
+                    offset_x_points: 0.0,
+                    offset_y_points: 0.0,
+                })],
+            )
+        };
+
+        let canvas = CanvasState::default();
+        let wrap_width = 600.0;
+
+        let inline = run_headless_layout(&make_doc(WrapMode::Inline), &canvas, wrap_width);
+        let square = run_headless_layout(&make_doc(WrapMode::Square), &canvas, wrap_width);
+        let tight = run_headless_layout(&make_doc(WrapMode::Tight), &canvas, wrap_width);
+        let through = run_headless_layout(&make_doc(WrapMode::Through), &canvas, wrap_width);
+        let top_bottom =
+            run_headless_layout(&make_doc(WrapMode::TopAndBottom), &canvas, wrap_width);
+
+        let inline_row = &inline.galley.rows[inline.images[0].row_index];
+        let square_row = &square.galley.rows[square.images[0].row_index];
+        let tight_row = &tight.galley.rows[tight.images[0].row_index];
+        let through_row = &through.galley.rows[through.images[0].row_index];
+        let top_bottom_row = &top_bottom.galley.rows[top_bottom.images[0].row_index];
+
+        assert!(
+            square_row.size.x > tight_row.size.x,
+            "square wrap should reserve more horizontal space than tight"
+        );
+        assert!(
+            square_row.size.y > tight_row.size.y,
+            "square wrap should reserve more vertical space than tight"
+        );
+        assert!(
+            through_row.size.x <= 1.0 && through_row.size.y <= 1.0,
+            "through wrap should not reserve layout space"
+        );
+        assert!(
+            (top_bottom_row.size.x - wrap_width).abs() < 1.0,
+            "top-and-bottom wrap should reserve the full row width"
+        );
+        assert!(
+            top_bottom.images[0].offset.x > through.images[0].offset.x,
+            "top-and-bottom should center image while through should anchor without horizontal reservation"
+        );
+        assert!(
+            inline_row.size.x < top_bottom_row.size.x,
+            "inline wrap should keep a tighter row than top-and-bottom"
+        );
+    }
+
+    #[test]
+    fn tight_wrap_chooses_side_from_image_position() {
+        let make_doc = |offset_x_points: f32| {
+            make_document(
+                vec![TextRun {
+                    text: format!(
+                        "{OBJECT_REPLACEMENT_CHAR}\nthis paragraph should flow beside the image and expose side choice"
+                    ),
+                    style: CharacterStyle::default(),
+                }],
+                vec![ParagraphStyle::default(), ParagraphStyle::default()],
+                vec![
+                    Some(DocumentImage {
+                        id: 21,
+                        bytes: vec![],
+                        alt_text: "tight".to_owned(),
+                        width_points: 180.0,
+                        height_points: 90.0,
+                        opacity: 1.0,
+                        wrap_mode: WrapMode::Tight,
+                        rendering: ImageRendering::Smooth,
+                        offset_x_points,
+                        offset_y_points: 0.0,
+                    }),
+                    None,
+                ],
+            )
+        };
+
+        let canvas = CanvasState::default();
+        let wrap_width = 600.0;
+        let left_placed = run_headless_layout(&make_doc(0.0), &canvas, wrap_width);
+        let right_placed = run_headless_layout(&make_doc(220.0), &canvas, wrap_width);
+
+        let left_row_x = left_placed.galley.rows[1].pos.x;
+        let right_row_x = right_placed.galley.rows[1].pos.x;
+
+        assert!(
+            left_row_x > right_row_x,
+            "left-placed image should push text to the right; got left_row_x={left_row_x}, right_row_x={right_row_x}"
+        );
+    }
+
+    #[test]
+    fn tight_wrap_vertical_offset_delays_text_wrapping() {
+        let make_doc = |offset_y_points: f32| {
+            make_document(
+                vec![TextRun {
+                    text: format!(
+                        "{OBJECT_REPLACEMENT_CHAR}\nthis paragraph should start unwrapped when image is moved down enough"
+                    ),
+                    style: CharacterStyle::default(),
+                }],
+                vec![ParagraphStyle::default(), ParagraphStyle::default()],
+                vec![
+                    Some(DocumentImage {
+                        id: 22,
+                        bytes: vec![],
+                        alt_text: "tight-y".to_owned(),
+                        width_points: 180.0,
+                        height_points: 90.0,
+                        opacity: 1.0,
+                        wrap_mode: WrapMode::Tight,
+                        rendering: ImageRendering::Smooth,
+                        offset_x_points: 0.0,
+                        offset_y_points,
+                    }),
+                    None,
+                ],
+            )
+        };
+
+        let canvas = CanvasState::default();
+        let wrap_width = 600.0;
+        let normal = run_headless_layout(&make_doc(0.0), &canvas, wrap_width);
+        let moved_down = run_headless_layout(&make_doc(220.0), &canvas, wrap_width);
+
+        let normal_row_x = normal.galley.rows[1].pos.x;
+        let moved_down_row_x = moved_down.galley.rows[1].pos.x;
+
+        assert!(
+            normal_row_x > moved_down_row_x + 40.0,
+            "moving image down should reduce early side-wrapping; got normal_row_x={normal_row_x}, moved_down_row_x={moved_down_row_x}"
+        );
     }
 }

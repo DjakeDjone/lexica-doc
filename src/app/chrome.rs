@@ -93,14 +93,15 @@ pub(super) fn paint_title_bar(
                 // Undo / Redo buttons moved after filename/path (still left-aligned)
                 let can_undo = history.can_undo();
                 let can_redo = history.can_redo();
-                let undo_btn = egui::Button::new(
-                    egui::RichText::new("↩")
-                        .size(14.0)
-                        .color(if can_undo { palette.title_fg } else { palette.title_muted }),
-                )
-                .min_size(egui::vec2(24.0, 24.0))
-                .fill(egui::Color32::TRANSPARENT)
-                .stroke(egui::Stroke::NONE);
+                let undo_btn =
+                    egui::Button::new(egui::RichText::new("↩").size(14.0).color(if can_undo {
+                        palette.title_fg
+                    } else {
+                        palette.title_muted
+                    }))
+                    .min_size(egui::vec2(24.0, 24.0))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::NONE);
                 if ui
                     .add_enabled(can_undo, undo_btn)
                     .on_hover_text("Undo (Ctrl+Z)")
@@ -111,14 +112,15 @@ pub(super) fn paint_title_bar(
                         *status_target = "Undo".to_owned();
                     }
                 }
-                let redo_btn = egui::Button::new(
-                    egui::RichText::new("↪")
-                        .size(14.0)
-                        .color(if can_redo { palette.title_fg } else { palette.title_muted }),
-                )
-                .min_size(egui::vec2(24.0, 24.0))
-                .fill(egui::Color32::TRANSPARENT)
-                .stroke(egui::Stroke::NONE);
+                let redo_btn =
+                    egui::Button::new(egui::RichText::new("↪").size(14.0).color(if can_redo {
+                        palette.title_fg
+                    } else {
+                        palette.title_muted
+                    }))
+                    .min_size(egui::vec2(24.0, 24.0))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::NONE);
                 if ui
                     .add_enabled(can_redo, redo_btn)
                     .on_hover_text("Redo (Ctrl+Shift+Z / Ctrl+Y)")
@@ -211,7 +213,10 @@ pub(super) fn paint_tab_row(
                         egui::Color32::TRANSPARENT
                     };
                     let button = egui::Button::new(
-                        egui::RichText::new("Picture Format").size(13.0).color(fg).strong(),
+                        egui::RichText::new("Picture Format")
+                            .size(13.0)
+                            .color(fg)
+                            .strong(),
                     )
                     .min_size(egui::vec2(108.0, 28.0))
                     .fill(bg)
@@ -554,7 +559,12 @@ fn ribbon_picture_group(
     palette: ThemePalette,
 ) {
     let Some(image_id) = canvas.selected_image_id else {
-        ribbon_info_group(ui, "Picture Format", "Click an image to select it.", palette);
+        ribbon_info_group(
+            ui,
+            "Picture Format",
+            "Click an image to select it.",
+            palette,
+        );
         return;
     };
 
@@ -570,7 +580,11 @@ fn ribbon_picture_group(
     };
 
     ribbon_group(ui, "Size", palette, |ui| {
-        ui.label(egui::RichText::new("W:").size(11.0).color(palette.text_muted));
+        ui.label(
+            egui::RichText::new("W:")
+                .size(11.0)
+                .color(palette.text_muted),
+        );
         let mut width = image.width_points;
         let aspect = image.height_points / image.width_points.max(1.0);
         let resp = ui.add(
@@ -588,7 +602,11 @@ fn ribbon_picture_group(
             *status_message = format!("Image: {:.0} × {:.0} pt", width, new_h);
         }
 
-        ui.label(egui::RichText::new("H:").size(11.0).color(palette.text_muted));
+        ui.label(
+            egui::RichText::new("H:")
+                .size(11.0)
+                .color(palette.text_muted),
+        );
         let mut height = image.height_points;
         let aspect_inv = image.width_points / image.height_points.max(1.0);
         let resp = ui.add(
@@ -630,7 +648,14 @@ fn ribbon_picture_group(
         );
         if resp.changed() {
             let now = ui.input(|i| i.time);
-            set_image_opacity(document, image_id, opacity_pct / 100.0, status_message, history, now);
+            set_image_opacity(
+                document,
+                image_id,
+                opacity_pct / 100.0,
+                status_message,
+                history,
+                now,
+            );
         }
         ui.vertical(|ui| {
             ui.spacing_mut().slider_width = 80.0;
@@ -638,7 +663,14 @@ fn ribbon_picture_group(
             let resp = ui.add(egui::Slider::new(&mut opacity_val, 0.0..=1.0).show_value(false));
             if resp.changed() {
                 let now = ui.input(|i| i.time);
-                set_image_opacity(document, image_id, opacity_val, status_message, history, now);
+                set_image_opacity(
+                    document,
+                    image_id,
+                    opacity_val,
+                    status_message,
+                    history,
+                    now,
+                );
             }
         });
     });
@@ -656,17 +688,41 @@ fn ribbon_picture_group(
     });
 
     ribbon_group(ui, "Quality", palette, |ui| {
-        if format_button(ui, image.rendering == ImageRendering::Smooth, "Smooth", palette)
-            .on_hover_text("Bilinear filtering (smooth edges)")
-            .clicked()
+        if format_button(
+            ui,
+            image.rendering == ImageRendering::Smooth,
+            "Smooth",
+            palette,
+        )
+        .on_hover_text("Bilinear filtering (smooth edges)")
+        .clicked()
         {
-            set_image_rendering(document, canvas, image_id, ImageRendering::Smooth, status_message, history);
+            set_image_rendering(
+                document,
+                canvas,
+                image_id,
+                ImageRendering::Smooth,
+                status_message,
+                history,
+            );
         }
-        if format_button(ui, image.rendering == ImageRendering::Crisp, "Crisp", palette)
-            .on_hover_text("Nearest-neighbor (pixel-perfect / sharp)")
-            .clicked()
+        if format_button(
+            ui,
+            image.rendering == ImageRendering::Crisp,
+            "Crisp",
+            palette,
+        )
+        .on_hover_text("Nearest-neighbor (pixel-perfect / sharp)")
+        .clicked()
         {
-            set_image_rendering(document, canvas, image_id, ImageRendering::Crisp, status_message, history);
+            set_image_rendering(
+                document,
+                canvas,
+                image_id,
+                ImageRendering::Crisp,
+                status_message,
+                history,
+            );
         }
     });
 }

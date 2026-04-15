@@ -528,6 +528,8 @@ fn resolve_drawing(
         opacity: 1.0,
         wrap_mode: crate::document::WrapMode::Inline,
         rendering: crate::document::ImageRendering::Smooth,
+        offset_x_points: 0.0,
+        offset_y_points: 0.0,
     };
     *next_image_id += 1;
     Some(image)
