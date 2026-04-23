@@ -10,7 +10,7 @@ use crate::document::{
 use super::{
     actions::{
         insert_image, insert_page_break, open_document, reset_image_size, save_document,
-        set_font_choice, set_font_size, set_highlight_color, set_image_opacity,
+        save_document_as, set_font_choice, set_font_size, set_highlight_color, set_image_opacity,
         set_image_rendering, set_image_wrap_mode, set_paragraph_alignment, set_text_color,
         sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
         toggle_strikethrough, toggle_underline,
@@ -292,7 +292,7 @@ pub(super) fn paint_ribbon(
                     ribbon_info_group(
                         ui,
                         "Shortcuts",
-                        "Command+S Save, Ctrl+Z Undo, Ctrl+Shift+Z / Ctrl+Y Redo, Command+B Bold, Command+I Italic, Command+U Underline",
+                        "Command+S Save, Command+Shift+S Save As, Ctrl+Z Undo, Ctrl+Shift+Z / Ctrl+Y Redo, Command+B Bold, Command+I Italic, Command+U Underline",
                         palette,
                     );
                 }
@@ -359,6 +359,9 @@ fn ribbon_file_group(
         }
         if ui.button("💾 Save").clicked() {
             save_document(document, status_message, current_path);
+        }
+        if ui.button("Save As").clicked() {
+            save_document_as(document, status_message, current_path);
         }
     });
 }

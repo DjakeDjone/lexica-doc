@@ -66,12 +66,7 @@ pub(super) fn save_document(
 ) {
     let path = match current_path.clone() {
         Some(path) => path,
-        None => match FileDialog::new()
-            .add_filter("text", &["txt"])
-            .add_filter("markdown", &["md"])
-            .set_file_name(&document.title)
-            .save_file()
-        {
+        None => match pick_save_path(document) {
             Some(path) => path,
             None => return,
         },
@@ -89,6 +84,39 @@ pub(super) fn save_document(
         }
         Err(error) => *status_message = error,
     }
+}
+
+pub(super) fn save_document_as(
+    document: &DocumentState,
+    status_message: &mut String,
+    current_path: &mut Option<PathBuf>,
+) {
+    let Some(path) = pick_save_path(document) else {
+        return;
+    };
+
+    match document.save_to_path(&path) {
+        Ok(()) => {
+            *current_path = Some(path.clone());
+            *status_message = format!(
+                "Saved {}",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("document")
+            );
+        }
+        Err(error) => *status_message = error,
+    }
+}
+
+fn pick_save_path(document: &DocumentState) -> Option<PathBuf> {
+    FileDialog::new()
+        .add_filter("text", &["txt"])
+        .add_filter("markdown", &["md", "markdown"])
+        .add_filter("web (formatted)", &["html", "htm"])
+        .add_filter("pdf", &["pdf"])
+        .set_file_name(&document.title)
+        .save_file()
 }
 
 pub(super) fn insert_page_break(
@@ -170,6 +198,14 @@ pub(super) fn handle_global_shortcuts(
 ) {
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
         save_document(document, status_message, current_path);
+    }
+    if ui.input_mut(|input| {
+        input.consume_key(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::S,
+        )
+    }) {
+        save_document_as(document, status_message, current_path);
     }
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
         if ui.input(|i| i.modifiers.shift) {

@@ -2,11 +2,16 @@ pub mod docx;
 mod markdown;
 mod text;
 
-use std::{fs, ops::Range, path::Path};
+use std::{collections::BTreeMap, fmt::Write as _, fs, ops::Range, path::Path};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use eframe::egui::{
     epaint::text::{TextFormat, VariationCoords},
     Color32, FontFamily, FontId, Stroke,
+};
+use printpdf::{
+    Base64OrRaw, BuiltinFont, GeneratePdfOptions, Op, PdfDocument, PdfFontHandle, PdfPage,
+    PdfSaveOptions, Point, Pt, TextItem,
 };
 use serde::Serialize;
 
@@ -952,18 +957,19 @@ impl DocumentState {
             .unwrap_or_default()
             .to_ascii_lowercase();
 
-        let serialized = match extension.as_str() {
-            "md" | "markdown" => self.to_markdown(),
-            "txt" | "" => self.to_plain_text_export(),
-            other => {
-                return Err(format!(
-                    "saving .{other} is not supported yet; use .txt or .md"
-                ));
-            }
-        };
-
-        fs::write(path, serialized)
-            .map_err(|error| format!("failed to save {}: {error}", path.display()))
+        match extension.as_str() {
+            "md" | "markdown" => fs::write(path, self.to_markdown())
+                .map_err(|error| format!("failed to save {}: {error}", path.display())),
+            "txt" | "" => fs::write(path, self.to_plain_text_export())
+                .map_err(|error| format!("failed to save {}: {error}", path.display())),
+            "html" | "htm" => fs::write(path, self.to_html())
+                .map_err(|error| format!("failed to save {}: {error}", path.display())),
+            "pdf" => fs::write(path, self.to_pdf_bytes()?)
+                .map_err(|error| format!("failed to save {}: {error}", path.display())),
+            other => Err(format!(
+                "saving .{other} is not supported yet; use .txt, .md, .html, or .pdf"
+            )),
+        }
     }
 
     pub fn paragraphs(&self) -> Vec<Paragraph> {
@@ -1222,6 +1228,299 @@ impl DocumentState {
             .collect::<Vec<_>>()
             .join("\n")
     }
+
+    fn to_html(&self) -> String {
+        let mut html = String::new();
+        let _ = write!(
+            html,
+            "<!doctype html>\
+<html lang=\"en\">\
+<head>\
+<meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<title>{}</title>\
+<style>\
+body {{ margin: 0; padding: 18pt; background: #e7ebf0; }}\
+.page {{ box-sizing: border-box; margin: 0 auto; width: {}pt; min-height: {}pt; padding: {}pt {}pt {}pt {}pt; background: #ffffff; color: #24272e; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.18); }}\
+.paragraph {{ margin: 0; white-space: pre-wrap; }}\
+.page-break {{ break-before: page; page-break-before: always; height: 0; }}\
+.image-block {{ display: block; max-width: 100%; }}\
+@media print {{ body {{ background: transparent; padding: 0; }} .page {{ box-shadow: none; width: auto; min-height: auto; }} }}\
+</style>\
+</head>\
+<body>\
+<div class=\"page\">",
+            html_escape(&self.title),
+            self.page_size.width_points,
+            self.page_size.height_points,
+            self.margins.top_points,
+            self.margins.right_points,
+            self.margins.bottom_points,
+            self.margins.left_points
+        );
+
+        for paragraph in self.paragraphs() {
+            if paragraph.style.page_break_before {
+                html.push_str("<div class=\"page-break\"></div>");
+            }
+
+            let _ = write!(
+                html,
+                "<p class=\"paragraph\" style=\"text-align:{};margin-top:{}pt;margin-bottom:{}pt;{}\">",
+                paragraph_alignment_css(paragraph.style.alignment),
+                paragraph.style.spacing_before_points,
+                paragraph.style.spacing_after_points,
+                line_spacing_css(paragraph.style.line_spacing)
+            );
+
+            if let Some(marker) = paragraph.list_marker {
+                let prefix = match paragraph.style.list_kind {
+                    ListKind::Bullet | ListKind::Ordered => format!("{marker} "),
+                    ListKind::None => String::new(),
+                };
+                html.push_str(&html_escape(&prefix));
+            }
+
+            for run in paragraph.runs {
+                let text: String = run
+                    .text
+                    .chars()
+                    .filter(|ch| *ch != OBJECT_REPLACEMENT_CHAR)
+                    .collect();
+                if text.is_empty() {
+                    continue;
+                }
+
+                let _ = write!(
+                    html,
+                    "<span style=\"{}\">{}</span>",
+                    run_style_css(run.style),
+                    html_escape(&text)
+                );
+            }
+
+            if let Some(image) = paragraph.image.as_ref() {
+                if let Some(mime_type) = image_mime_type(&image.bytes) {
+                    let _ = write!(
+                        html,
+                        "<img class=\"image-block\" alt=\"{}\" src=\"data:{};base64,{}\" style=\"width:{}pt;height:{}pt;opacity:{:.3};{}\" />",
+                        html_escape(&image.alt_text),
+                        mime_type,
+                        BASE64_STANDARD.encode(&image.bytes),
+                        image.width_points,
+                        image.height_points,
+                        image.opacity.clamp(0.0, 1.0),
+                        image_position_css(image)
+                    );
+                }
+            }
+
+            html.push_str("</p>");
+        }
+
+        html.push_str("</div></body></html>");
+        html
+    }
+
+    fn to_pdf_bytes(&self) -> Result<Vec<u8>, String> {
+        let html = self.to_pdf_html();
+        let options = GeneratePdfOptions {
+            page_width: Some(points_to_mm(self.page_size.width_points)),
+            page_height: Some(points_to_mm(self.page_size.height_points)),
+            margin_top: Some(points_to_mm(self.margins.top_points)),
+            margin_right: Some(points_to_mm(self.margins.right_points)),
+            margin_bottom: Some(points_to_mm(self.margins.bottom_points)),
+            margin_left: Some(points_to_mm(self.margins.left_points)),
+            ..GeneratePdfOptions::default()
+        };
+        let images: BTreeMap<String, Base64OrRaw> = BTreeMap::new();
+        let fonts: BTreeMap<String, Base64OrRaw> = BTreeMap::new();
+
+        let mut warnings = Vec::new();
+        let mut rendered = PdfDocument::from_html(&html, &images, &fonts, &options, &mut warnings)
+            .map_err(|error| format!("failed to render PDF: {error}"))?;
+        rendered.metadata.info.document_title = self.title.clone();
+        rendered.metadata.info.conformance = Default::default();
+        if rendered.pages.is_empty() {
+            return Ok(self.to_plain_text_pdf_bytes());
+        }
+
+        Ok(rendered.save(&PdfSaveOptions::default(), &mut warnings))
+    }
+
+    fn to_pdf_html(&self) -> String {
+        let mut html = String::new();
+        let _ = write!(
+            html,
+            "<!doctype html>\
+<html lang=\"en\">\
+<head>\
+<meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<title>{}</title>\
+<style>\
+body {{ margin: 0; padding: 0; color: #24272e; font-family: Helvetica, Arial, sans-serif; }}\
+p {{ margin: 0; white-space: pre-wrap; }}\
+.page-break {{ break-before: page; page-break-before: always; height: 0; }}\
+.image-block {{ display: block; max-width: 100%; }}\
+</style>\
+</head>\
+<body>",
+            html_escape(&self.title)
+        );
+
+        for paragraph in self.paragraphs() {
+            if paragraph.style.page_break_before {
+                html.push_str("<div class=\"page-break\"></div>");
+            }
+
+            let _ = write!(
+                html,
+                "<p style=\"text-align:{};margin-top:{:.2}px;margin-bottom:{:.2}px;{}\">",
+                paragraph_alignment_css(paragraph.style.alignment),
+                points_to_css_px(paragraph.style.spacing_before_points as f32),
+                points_to_css_px(paragraph.style.spacing_after_points as f32),
+                line_spacing_css_pdf(paragraph.style.line_spacing)
+            );
+
+            if let Some(marker) = paragraph.list_marker {
+                let prefix = match paragraph.style.list_kind {
+                    ListKind::Bullet | ListKind::Ordered => format!("{marker} "),
+                    ListKind::None => String::new(),
+                };
+                html.push_str(&html_escape(&prefix));
+            }
+
+            for run in paragraph.runs {
+                let text: String = run
+                    .text
+                    .chars()
+                    .filter(|ch| *ch != OBJECT_REPLACEMENT_CHAR)
+                    .collect();
+                if text.is_empty() {
+                    continue;
+                }
+
+                let escaped = html_escape(&text);
+                let mut run_html = format!(
+                    "<span style=\"{}\">{escaped}</span>",
+                    run_style_css_pdf(run.style)
+                );
+                if run.style.bold {
+                    run_html = format!("<strong>{run_html}</strong>");
+                }
+                if run.style.italic {
+                    run_html = format!("<em>{run_html}</em>");
+                }
+                if run.style.underline {
+                    run_html =
+                        format!("<span style=\"text-decoration:underline;\">{run_html}</span>");
+                }
+                if run.style.strikethrough {
+                    run_html =
+                        format!("<span style=\"text-decoration:line-through;\">{run_html}</span>");
+                }
+                html.push_str(&run_html);
+            }
+
+            if let Some(image) = paragraph.image.as_ref() {
+                if let Some(mime_type) = image_mime_type(&image.bytes) {
+                    let _ = write!(
+                        html,
+                        "<img class=\"image-block\" alt=\"{}\" src=\"data:{};base64,{}\" style=\"width:{:.2}px;height:{:.2}px;opacity:{:.3};{}\" />",
+                        html_escape(&image.alt_text),
+                        mime_type,
+                        BASE64_STANDARD.encode(&image.bytes),
+                        points_to_css_px(image.width_points),
+                        points_to_css_px(image.height_points),
+                        image.opacity.clamp(0.0, 1.0),
+                        image_position_css_pdf(image)
+                    );
+                }
+            }
+
+            html.push_str("</p>");
+        }
+
+        html.push_str("</body></html>");
+        html
+    }
+
+    fn to_plain_text_pdf_bytes(&self) -> Vec<u8> {
+        let page_width_mm = points_to_mm(self.page_size.width_points);
+        let page_height_mm = points_to_mm(self.page_size.height_points);
+        let left = self.margins.left_points.max(18.0);
+        let top = self.margins.top_points.max(18.0);
+        let bottom = self.margins.bottom_points.max(18.0);
+
+        let font_size = 11.0_f32;
+        let line_height = 14.0_f32;
+        let max_lines =
+            (((self.page_size.height_points - top - bottom) / line_height).floor() as usize).max(1);
+
+        let mut logical_lines = Vec::new();
+        for line in self
+            .to_plain_text_export()
+            .replace('\u{000C}', "\n\n----- Page Break -----\n\n")
+            .lines()
+        {
+            let wrapped = wrap_text_for_pdf(line, 100);
+            if wrapped.is_empty() {
+                logical_lines.push(String::new());
+            } else {
+                logical_lines.extend(wrapped);
+            }
+        }
+        if logical_lines.is_empty() {
+            logical_lines.push(String::new());
+        }
+
+        let mut pages = Vec::new();
+        for chunk in logical_lines.chunks(max_lines) {
+            let mut y = self.page_size.height_points - top - font_size;
+            let mut ops = vec![
+                Op::StartTextSection,
+                Op::SetFont {
+                    font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+                    size: Pt(font_size),
+                },
+                Op::SetLineHeight {
+                    lh: Pt(line_height),
+                },
+                Op::SetTextCursor {
+                    pos: Point {
+                        x: Pt(left),
+                        y: Pt(y),
+                    },
+                },
+            ];
+
+            for (i, line) in chunk.iter().enumerate() {
+                ops.push(Op::ShowText {
+                    items: vec![TextItem::Text(line.clone())],
+                });
+                if i + 1 < chunk.len() {
+                    ops.push(Op::AddLineBreak);
+                    y -= line_height;
+                    if y <= bottom {
+                        break;
+                    }
+                }
+            }
+
+            ops.push(Op::EndTextSection);
+            pages.push(PdfPage::new(
+                printpdf::Mm(page_width_mm),
+                printpdf::Mm(page_height_mm),
+                ops,
+            ));
+        }
+
+        let mut document = PdfDocument::new(&self.title);
+        let document = document.with_pages(pages);
+        let mut warnings = Vec::new();
+        document.save(&PdfSaveOptions::default(), &mut warnings)
+    }
 }
 
 impl PageSize {
@@ -1339,8 +1638,237 @@ fn markdown_text_from_runs(runs: &[TextRun]) -> String {
     output
 }
 
+fn points_to_mm(points: f32) -> f32 {
+    points * (25.4 / 72.0)
+}
+
+fn points_to_css_px(points: f32) -> f32 {
+    points * (96.0 / 72.0)
+}
+
+fn paragraph_alignment_css(alignment: ParagraphAlignment) -> &'static str {
+    match alignment {
+        ParagraphAlignment::Left => "left",
+        ParagraphAlignment::Center => "center",
+        ParagraphAlignment::Right => "right",
+        ParagraphAlignment::Justify => "justify",
+    }
+}
+
+fn line_spacing_css(line_spacing: LineSpacing) -> String {
+    match line_spacing.kind {
+        LineSpacingKind::AutoMultiplier => {
+            format!("line-height:{:.3};", line_spacing.value.max(0.1))
+        }
+        LineSpacingKind::AtLeastPoints | LineSpacingKind::ExactPoints => {
+            format!("line-height:{:.3}pt;", line_spacing.value.max(1.0))
+        }
+    }
+}
+
+fn line_spacing_css_pdf(line_spacing: LineSpacing) -> String {
+    match line_spacing.kind {
+        LineSpacingKind::AutoMultiplier => {
+            format!("line-height:{:.3};", line_spacing.value.max(0.1))
+        }
+        LineSpacingKind::AtLeastPoints | LineSpacingKind::ExactPoints => {
+            format!(
+                "line-height:{:.2}px;",
+                points_to_css_px(line_spacing.value.max(1.0))
+            )
+        }
+    }
+}
+
+fn run_style_css(style: CharacterStyle) -> String {
+    let mut css = format!(
+        "font-family:{};font-size:{:.2}pt;color:{};",
+        css_font_family(style),
+        style.font_size_points.max(1.0),
+        css_color(style.text_color)
+    );
+    if style.bold {
+        css.push_str("font-weight:700;");
+    }
+    if style.italic {
+        css.push_str("font-style:italic;");
+    }
+    if style.highlight_color != Color32::TRANSPARENT {
+        let _ = write!(
+            css,
+            "background-color:{};",
+            css_color(style.highlight_color)
+        );
+    }
+    let decoration = text_decoration_css(style);
+    if !decoration.is_empty() {
+        let _ = write!(css, "text-decoration:{};", decoration);
+    }
+    css
+}
+
+fn run_style_css_pdf(style: CharacterStyle) -> String {
+    let font_points = if style.bold {
+        style.font_size_points + 0.8
+    } else {
+        style.font_size_points
+    };
+
+    let mut css = format!(
+        "font-family:{};font-size:{:.2}px;color:{};",
+        css_font_family(style),
+        points_to_css_px(font_points.max(1.0)),
+        css_color_rgb(style.text_color)
+    );
+    if style.italic {
+        css.push_str("font-style:italic;");
+    }
+    if style.highlight_color != Color32::TRANSPARENT {
+        let _ = write!(
+            css,
+            "background-color:{};",
+            css_color_rgb(style.highlight_color)
+        );
+    }
+    let decoration = text_decoration_css(style);
+    if !decoration.is_empty() {
+        let _ = write!(css, "text-decoration:{};", decoration);
+    }
+    css
+}
+
+fn text_decoration_css(style: CharacterStyle) -> &'static str {
+    match (style.underline, style.strikethrough) {
+        (true, true) => "underline line-through",
+        (true, false) => "underline",
+        (false, true) => "line-through",
+        (false, false) => "",
+    }
+}
+
+fn css_font_family(style: CharacterStyle) -> String {
+    match style.font_family_name {
+        Some("docx-carlito") => "Carlito, Calibri, sans-serif".to_owned(),
+        Some("docx-caladea") => "Caladea, Cambria, serif".to_owned(),
+        Some("docx-liberation-sans") => "\"Liberation Sans\", Arial, sans-serif".to_owned(),
+        Some("docx-liberation-serif") => {
+            "\"Liberation Serif\", \"Times New Roman\", serif".to_owned()
+        }
+        Some("docx-liberation-mono") => {
+            "\"Liberation Mono\", \"Courier New\", Consolas, monospace".to_owned()
+        }
+        Some(name) => format!("\"{}\", sans-serif", name.replace('"', "\\\"")),
+        None => match style.font_choice {
+            FontChoice::Proportional => "sans-serif".to_owned(),
+            FontChoice::Monospace => "monospace".to_owned(),
+        },
+    }
+}
+
+fn css_color(color: Color32) -> String {
+    format!(
+        "rgba({}, {}, {}, {:.3})",
+        color.r(),
+        color.g(),
+        color.b(),
+        (color.a() as f32 / 255.0).clamp(0.0, 1.0)
+    )
+}
+
+fn css_color_rgb(color: Color32) -> String {
+    format!("rgb({}, {}, {})", color.r(), color.g(), color.b())
+}
+
+fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
+    match image::guess_format(bytes) {
+        Ok(image::ImageFormat::Png) => Some("image/png"),
+        Ok(image::ImageFormat::Jpeg) => Some("image/jpeg"),
+        Ok(image::ImageFormat::Gif) => Some("image/gif"),
+        Ok(image::ImageFormat::Bmp) => Some("image/bmp"),
+        _ => None,
+    }
+}
+
+fn wrap_text_for_pdf(text: &str, max_chars: usize) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let current_len = current.chars().count();
+        let word_len = word.chars().count();
+        let projected = if current.is_empty() {
+            word_len
+        } else {
+            current_len + 1 + word_len
+        };
+
+        if projected > max_chars && !current.is_empty() {
+            out.push(std::mem::take(&mut current));
+        }
+
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+fn image_position_css(image: &DocumentImage) -> String {
+    if image.layout_mode == ImageLayoutMode::Floating {
+        format!(
+            "position:relative;left:{:.2}pt;top:{:.2}pt;z-index:{};",
+            image.offset_x_points(),
+            image.offset_y_points(),
+            image.z_index
+        )
+    } else {
+        String::new()
+    }
+}
+
+fn image_position_css_pdf(image: &DocumentImage) -> String {
+    if image.layout_mode == ImageLayoutMode::Floating {
+        format!(
+            "position:relative;left:{:.2}px;top:{:.2}px;z-index:{};",
+            points_to_css_px(image.offset_x_points()),
+            points_to_css_px(image.offset_y_points()),
+            image.z_index
+        )
+    } else {
+        String::new()
+    }
+}
+
+fn html_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use super::{
         plain_text_from_runs, CharacterStyle, DocumentImage, DocumentState, ImageLayoutMode,
         ImageRendering, ListKind, WrapMode, OBJECT_REPLACEMENT_CHAR,
@@ -1415,5 +1943,81 @@ mod tests {
             document.plain_text(),
             format!("alpha \n{OBJECT_REPLACEMENT_CHAR}\nbeta")
         );
+    }
+
+    #[test]
+    fn exports_html_with_styled_runs() {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs(
+            "Styled".to_owned(),
+            vec![
+                super::TextRun {
+                    text: "Bold".to_owned(),
+                    style: CharacterStyle {
+                        bold: true,
+                        ..CharacterStyle::default()
+                    },
+                },
+                super::TextRun {
+                    text: " + ".to_owned(),
+                    style: CharacterStyle::default(),
+                },
+                super::TextRun {
+                    text: "Mono".to_owned(),
+                    style: CharacterStyle {
+                        font_choice: super::FontChoice::Monospace,
+                        ..CharacterStyle::default()
+                    },
+                },
+            ],
+        );
+
+        let html = document.to_html();
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("font-weight:700;"));
+        assert!(html.contains("Bold"));
+        assert!(html.contains("Mono"));
+    }
+
+    #[test]
+    fn exports_pdf_html_with_pdf_friendly_css() {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs(
+            "Styled".to_owned(),
+            vec![super::TextRun {
+                text: "Bold".to_owned(),
+                style: CharacterStyle {
+                    bold: true,
+                    ..CharacterStyle::default()
+                },
+            }],
+        );
+
+        let html = document.to_pdf_html();
+        assert!(html.contains("font-family: Helvetica, Arial, sans-serif"));
+        assert!(html.contains("font-size:"));
+        assert!(html.contains("px"));
+        assert!(html.contains("<strong>"));
+        assert!(!html.contains("box-shadow"));
+    }
+
+    #[test]
+    fn saves_pdf_extension() {
+        let mut path = std::env::temp_dir();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        path.push(format!("wors-export-{stamp}.pdf"));
+
+        let document = DocumentState::bootstrap();
+        document
+            .save_to_path(&path)
+            .expect("pdf save should succeed");
+
+        let bytes = fs::read(&path).expect("pdf should be readable");
+        assert!(bytes.starts_with(b"%PDF"));
+
+        let _ = fs::remove_file(path);
     }
 }
