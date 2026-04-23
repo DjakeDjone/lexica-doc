@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::document::{
-    DocumentState, FontChoice, ImageRendering, ListKind, ParagraphAlignment, WrapMode,
-    OBJECT_REPLACEMENT_CHAR,
+    DocumentState, FontChoice, ImageLayoutMode, ImageRendering, ListKind, ParagraphAlignment,
+    WrapMode, OBJECT_REPLACEMENT_CHAR,
 };
 
 use super::{
@@ -682,8 +682,85 @@ fn ribbon_picture_group(
                 .on_hover_text(wrap.label())
                 .clicked()
             {
+                let now = ui.input(|i| i.time);
+                history.checkpoint(document, now);
                 set_image_wrap_mode(document, image_id, wrap, status_message, history);
+                // Auto-switch layout mode based on wrap
+                if wrap == WrapMode::Inline {
+                    document.set_image_layout_mode(image_id, ImageLayoutMode::Inline);
+                } else {
+                    document.set_image_layout_mode(image_id, ImageLayoutMode::Floating);
+                }
             }
+        }
+    });
+
+    ribbon_group(ui, "Layout", palette, |ui| {
+        let is_inline = image.layout_mode == ImageLayoutMode::Inline;
+        if format_button(ui, is_inline, "Inline", palette)
+            .on_hover_text("Inline with text")
+            .clicked()
+        {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
+            document.set_image_layout_mode(image_id, ImageLayoutMode::Inline);
+            *status_message = "Layout: Inline".to_owned();
+        }
+        if format_button(ui, !is_inline, "Float", palette)
+            .on_hover_text("Floating (independent of text)")
+            .clicked()
+        {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
+            document.set_image_layout_mode(image_id, ImageLayoutMode::Floating);
+            *status_message = "Layout: Floating".to_owned();
+        }
+
+        ui.separator();
+
+        let mut lock_ar = image.lock_aspect_ratio;
+        if ui
+            .checkbox(&mut lock_ar, "Lock Ratio")
+            .on_hover_text("Lock aspect ratio when resizing")
+            .changed()
+        {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
+            document.set_image_lock_aspect_ratio(image_id, lock_ar);
+        }
+
+        let mut move_text = image.move_with_text;
+        if ui
+            .checkbox(&mut move_text, "Move with text")
+            .on_hover_text("Image moves when anchor paragraph moves")
+            .changed()
+        {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
+            document.set_image_move_with_text(image_id, move_text);
+        }
+    });
+
+    ribbon_group(ui, "Arrange", palette, |ui| {
+        if ui
+            .button("▲ Forward")
+            .on_hover_text("Bring forward (increase z-order)")
+            .clicked()
+        {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
+            document.set_image_z_index(image_id, image.z_index + 1);
+            *status_message = format!("Z-order: {}", image.z_index + 1);
+        }
+        if ui
+            .button("▼ Backward")
+            .on_hover_text("Send backward (decrease z-order)")
+            .clicked()
+        {
+            let now = ui.input(|i| i.time);
+            history.checkpoint(document, now);
+            document.set_image_z_index(image_id, image.z_index - 1);
+            *status_message = format!("Z-order: {}", image.z_index - 1);
         }
     });
 

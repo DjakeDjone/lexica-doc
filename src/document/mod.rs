@@ -150,15 +150,19 @@ pub enum WrapMode {
     Tight,
     Through,
     TopAndBottom,
+    BehindText,
+    InFrontOfText,
 }
 
 impl WrapMode {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Inline,
         Self::Square,
         Self::Tight,
         Self::Through,
         Self::TopAndBottom,
+        Self::BehindText,
+        Self::InFrontOfText,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -168,7 +172,19 @@ impl WrapMode {
             Self::Tight => "Tight",
             Self::Through => "Through",
             Self::TopAndBottom => "Top & Bottom",
+            Self::BehindText => "Behind Text",
+            Self::InFrontOfText => "In Front",
         }
+    }
+
+    /// Returns true if this wrap mode is a floating mode (not inline).
+    pub const fn is_floating(self) -> bool {
+        !matches!(self, Self::Inline)
+    }
+
+    /// Returns true if text layout should not be affected by this image.
+    pub const fn is_no_text_displacement(self) -> bool {
+        matches!(self, Self::BehindText | Self::InFrontOfText)
     }
 }
 
@@ -176,6 +192,88 @@ impl WrapMode {
 pub enum ImageRendering {
     Smooth,
     Crisp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum ImageLayoutMode {
+    Inline,
+    Floating,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum HorizontalRelativeTo {
+    Page,
+    Margin,
+    Column,
+    Character,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum VerticalRelativeTo {
+    Page,
+    Margin,
+    Paragraph,
+    Line,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum PositionAlign {
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct HorizontalPosition {
+    pub relative_to: HorizontalRelativeTo,
+    pub align: Option<PositionAlign>,
+    pub offset_points: f32,
+}
+
+impl Default for HorizontalPosition {
+    fn default() -> Self {
+        Self {
+            relative_to: HorizontalRelativeTo::Column,
+            align: Some(PositionAlign::Start),
+            offset_points: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct VerticalPosition {
+    pub relative_to: VerticalRelativeTo,
+    pub align: Option<PositionAlign>,
+    pub offset_points: f32,
+}
+
+impl Default for VerticalPosition {
+    fn default() -> Self {
+        Self {
+            relative_to: VerticalRelativeTo::Paragraph,
+            align: Some(PositionAlign::Start),
+            offset_points: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct DistanceFromText {
+    pub top_points: f32,
+    pub right_points: f32,
+    pub bottom_points: f32,
+    pub left_points: f32,
+}
+
+impl Default for DistanceFromText {
+    fn default() -> Self {
+        Self {
+            top_points: 0.0,
+            right_points: 8.0,
+            bottom_points: 0.0,
+            left_points: 8.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -186,11 +284,29 @@ pub struct DocumentImage {
     pub alt_text: String,
     pub width_points: f32,
     pub height_points: f32,
+    pub lock_aspect_ratio: bool,
     pub opacity: f32,
+    pub layout_mode: ImageLayoutMode,
     pub wrap_mode: WrapMode,
     pub rendering: ImageRendering,
-    pub offset_x_points: f32,
-    pub offset_y_points: f32,
+    pub horizontal_position: HorizontalPosition,
+    pub vertical_position: VerticalPosition,
+    pub distance_from_text: DistanceFromText,
+    pub z_index: i32,
+    pub move_with_text: bool,
+    pub allow_overlap: bool,
+}
+
+impl DocumentImage {
+    /// Horizontal position offset in document points (convenience accessor).
+    pub fn offset_x_points(&self) -> f32 {
+        self.horizontal_position.offset_points
+    }
+
+    /// Vertical position offset in document points (convenience accessor).
+    pub fn offset_y_points(&self) -> f32 {
+        self.vertical_position.offset_points
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -620,8 +736,91 @@ impl DocumentState {
         for slot in &mut self.paragraph_images {
             if let Some(image) = slot {
                 if image.id == id {
-                    image.offset_x_points = x_points;
-                    image.offset_y_points = y_points;
+                    image.horizontal_position.offset_points = x_points;
+                    image.vertical_position.offset_points = y_points;
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_layout_mode(&mut self, id: usize, mode: ImageLayoutMode) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.layout_mode = mode;
+                    // When switching to inline, reset wrap mode
+                    if mode == ImageLayoutMode::Inline {
+                        image.wrap_mode = WrapMode::Inline;
+                    } else if image.wrap_mode == WrapMode::Inline {
+                        image.wrap_mode = WrapMode::Square;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_horizontal_position(&mut self, id: usize, pos: HorizontalPosition) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.horizontal_position = pos;
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_vertical_position(&mut self, id: usize, pos: VerticalPosition) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.vertical_position = pos;
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_distance_from_text(&mut self, id: usize, dist: DistanceFromText) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.distance_from_text = dist;
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_z_index(&mut self, id: usize, z: i32) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.z_index = z;
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_move_with_text(&mut self, id: usize, flag: bool) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.move_with_text = flag;
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn set_image_lock_aspect_ratio(&mut self, id: usize, flag: bool) {
+        for slot in &mut self.paragraph_images {
+            if let Some(image) = slot {
+                if image.id == id {
+                    image.lock_aspect_ratio = flag;
                     return;
                 }
             }
@@ -1108,8 +1307,8 @@ fn markdown_text_from_runs(runs: &[TextRun]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        plain_text_from_runs, CharacterStyle, DocumentImage, DocumentState, ImageRendering,
-        ListKind, WrapMode, OBJECT_REPLACEMENT_CHAR,
+        plain_text_from_runs, CharacterStyle, DocumentImage, DocumentState, ImageLayoutMode,
+        ImageRendering, ListKind, WrapMode, OBJECT_REPLACEMENT_CHAR,
     };
 
     #[test]
@@ -1152,11 +1351,17 @@ mod tests {
                 alt_text: "diagram".to_owned(),
                 width_points: 120.0,
                 height_points: 60.0,
+                lock_aspect_ratio: true,
                 opacity: 1.0,
+                layout_mode: ImageLayoutMode::Inline,
                 wrap_mode: WrapMode::Inline,
                 rendering: ImageRendering::Smooth,
-                offset_x_points: 0.0,
-                offset_y_points: 0.0,
+                horizontal_position: Default::default(),
+                vertical_position: Default::default(),
+                distance_from_text: Default::default(),
+                z_index: 0,
+                move_with_text: true,
+                allow_overlap: false,
             },
         );
         let paragraphs = document.paragraphs();

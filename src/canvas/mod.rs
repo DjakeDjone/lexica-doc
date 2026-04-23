@@ -147,14 +147,54 @@ pub fn paint_document_canvas(
             ),
         );
         let galley_origin = page.content_rect.min - egui::vec2(0.0, page.start_y);
+        let zoom = canvas.zoom;
+
+        // Helper: compute the screen rect for an image layout entry on this page.
+        let image_screen_rect = |image: &ImageLayout| -> Option<Rect> {
+            let row = document_layout.galley.rows.get(image.row_index)?;
+            let image_y = row.pos.y;
+            if image_y < page.start_y || image_y > page.end_y {
+                return None;
+            }
+            Some(Rect::from_min_size(
+                egui::pos2(
+                    page.content_rect.left()
+                        + row.pos.x
+                        + image.offset.x
+                        + document_points_to_screen_points(image.image.offset_x_points(), zoom),
+                    page.content_rect.top()
+                        + image_y
+                        - page.start_y
+                        + image.offset.y
+                        + document_points_to_screen_points(image.image.offset_y_points(), zoom),
+                ),
+                image.size,
+            ))
+        };
+
+        let page_clipped_painter = painter.with_clip_rect(page.page_rect);
+
+        // Layer 1: Paint behind-text images (below everything)
+        for image in &document_layout.images {
+            if image.image.wrap_mode != WrapMode::BehindText {
+                continue;
+            }
+            let Some(image_rect) = image_screen_rect(image) else {
+                continue;
+            };
+            paint_image_on_page(ui, canvas, &page_clipped_painter, image, image_rect, &palette, 1.0);
+            new_image_rects.push((image.image.id, image_rect));
+        }
+
+        // Layer 2: Paint text galley
         painter.with_clip_rect(visible_content_rect).galley(
             galley_origin,
             document_layout.galley.clone(),
             Color32::BLACK,
         );
 
-            let clipped_painter = painter.with_clip_rect(visible_content_rect);
-            let page_clipped_painter = painter.with_clip_rect(page.page_rect);
+        // List markers
+        let clipped_painter = painter.with_clip_rect(visible_content_rect);
         for marker in &document_layout.list_markers {
             let Some(row) = document_layout.galley.rows.get(marker.row_index) else {
                 continue;
@@ -177,57 +217,35 @@ pub fn paint_document_canvas(
             );
         }
 
-        for image in &document_layout.images {
-            let Some(row) = document_layout.galley.rows.get(image.row_index) else {
+        // Layer 3: Paint normal images (not behind-text, not in-front-of-text) sorted by z-index
+        let mut normal_images: Vec<&ImageLayout> = document_layout
+            .images
+            .iter()
+            .filter(|img| !img.image.wrap_mode.is_no_text_displacement())
+            .collect();
+        normal_images.sort_by_key(|img| img.image.z_index);
+
+        for image in &normal_images {
+            let Some(image_rect) = image_screen_rect(image) else {
                 continue;
             };
-            let image_y = row.pos.y;
-            if image_y < page.start_y || image_y > page.end_y {
+            paint_image_on_page(ui, canvas, &page_clipped_painter, image, image_rect, &palette, 1.0);
+            new_image_rects.push((image.image.id, image_rect));
+        }
+
+        // Layer 4: Paint in-front-of-text images (above everything)
+        let mut front_images: Vec<&ImageLayout> = document_layout
+            .images
+            .iter()
+            .filter(|img| img.image.wrap_mode == WrapMode::InFrontOfText)
+            .collect();
+        front_images.sort_by_key(|img| img.image.z_index);
+
+        for image in &front_images {
+            let Some(image_rect) = image_screen_rect(image) else {
                 continue;
-            }
-
-            let image_rect = Rect::from_min_size(
-                egui::pos2(
-                    page.content_rect.left()
-                        + row.pos.x
-                        + image.offset.x
-                        + document_points_to_screen_points(image.image.offset_x_points, canvas.zoom),
-                    page.content_rect.top()
-                        + image_y
-                        - page.start_y
-                        + image.offset.y
-                        + document_points_to_screen_points(image.image.offset_y_points, canvas.zoom),
-                ),
-                image.size,
-            );
-
-            if let Some(texture) = texture_for_image(ui.ctx(), canvas, &image.image) {
-                let tint = Color32::from_white_alpha(
-                    (image.image.opacity * 255.0).round().clamp(0.0, 255.0) as u8,
-                );
-                page_clipped_painter.image(
-                    texture.id(),
-                    image_rect,
-                    Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    tint,
-                );
-            } else {
-                page_clipped_painter.rect_filled(image_rect, CornerRadius::same(4), palette.footer_bg);
-                page_clipped_painter.rect_stroke(
-                    image_rect,
-                    CornerRadius::same(4),
-                    Stroke::new(1.0, palette.footer_stroke),
-                    StrokeKind::Outside,
-                );
-                page_clipped_painter.text(
-                    image_rect.center(),
-                    Align2::CENTER_CENTER,
-                    &image.image.alt_text,
-                    FontId::new(12.0, FontFamily::Proportional),
-                    palette.footer_text,
-                );
-            }
-
+            };
+            paint_image_on_page(ui, canvas, &page_clipped_painter, image, image_rect, &palette, 1.0);
             new_image_rects.push((image.image.id, image_rect));
         }
     }
@@ -244,6 +262,21 @@ pub fn paint_document_canvas(
             canvas,
             document,
         );
+    }
+
+    // Draw ghost image if dragging
+    if let Some(move_drag) = &canvas.move_drag {
+        if move_drag.current_ptr != move_drag.start_ptr {
+            let offset = move_drag.current_ptr - move_drag.start_ptr;
+            let ghost_rect = move_drag.start_rect.translate(offset);
+            if let Some(image_layout) = document_layout
+                .images
+                .iter()
+                .find(|i| i.image.id == move_drag.image_id)
+            {
+                paint_image_on_page(ui, canvas, &painter, image_layout, ghost_rect, &palette, 0.5);
+            }
+        }
     }
 
     // Draw selection border + handles with unclipped painter so they aren't cut at page margins
@@ -311,6 +344,42 @@ pub fn paint_document_canvas(
         footer_galley,
         palette.footer_text,
     );
+}
+
+fn paint_image_on_page(
+    ui: &mut egui::Ui,
+    canvas: &mut CanvasState,
+    painter: &egui::Painter,
+    image: &ImageLayout,
+    image_rect: Rect,
+    palette: &palette::CanvasPalette,
+    alpha_multiplier: f32,
+) {
+    if let Some(texture) = texture_for_image(ui.ctx(), canvas, &image.image) {
+        let alpha = (image.image.opacity * alpha_multiplier * 255.0).round().clamp(0.0, 255.0) as u8;
+        let tint = Color32::from_white_alpha(alpha);
+        painter.image(
+            texture.id(),
+            image_rect,
+            Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            tint,
+        );
+    } else {
+        painter.rect_filled(image_rect, CornerRadius::same(4), palette.footer_bg);
+        painter.rect_stroke(
+            image_rect,
+            CornerRadius::same(4),
+            Stroke::new(1.0, palette.footer_stroke),
+            StrokeKind::Outside,
+        );
+        painter.text(
+            image_rect.center(),
+            Align2::CENTER_CENTER,
+            &image.image.alt_text,
+            FontId::new(12.0, FontFamily::Proportional),
+            palette.footer_text,
+        );
+    }
 }
 
 fn resize_handle_rects(image_rect: Rect) -> [(ResizeHandle, Rect); 8] {
@@ -391,8 +460,17 @@ fn handle_image_interaction(
 
     // Finalize any active image drag when mouse released
     if !response.dragged() {
+        if let Some(move_drag) = canvas.move_drag.take() {
+            let zoom = canvas.zoom.max(0.01);
+            let dx = (move_drag.current_ptr.x - move_drag.start_ptr.x) / zoom;
+            let dy = (move_drag.current_ptr.y - move_drag.start_ptr.y) / zoom;
+            document.set_image_offset_by_id(
+                move_drag.image_id,
+                move_drag.start_x_points + dx,
+                move_drag.start_y_points + dy,
+            );
+        }
         canvas.resize_drag = None;
-        canvas.move_drag = None;
     }
 
     // Continue active resize drag
@@ -412,10 +490,18 @@ fn handle_image_interaction(
                 let dx = (pointer_pos.x - start_ptr.x) / zoom;
                 let dy = (pointer_pos.y - start_ptr.y) / zoom;
                 let shift = ui.input(|i| i.modifiers.shift);
+                let lock_aspect = document
+                    .paragraph_images
+                    .iter()
+                    .flatten()
+                    .find(|img| img.id == image_id)
+                    .map(|img| img.lock_aspect_ratio)
+                    .unwrap_or(false);
+                let lock_ratio = lock_aspect ^ shift;
                 let aspect = start_h / start_w.max(1.0);
                 let (new_w, new_h) = match handle {
                     ResizeHandle::SE => {
-                        if shift {
+                        if lock_ratio {
                             let w = start_w + dx;
                             (w, w * aspect)
                         } else {
@@ -423,7 +509,7 @@ fn handle_image_interaction(
                         }
                     }
                     ResizeHandle::SW => {
-                        if shift {
+                        if lock_ratio {
                             let w = start_w - dx;
                             (w, w * aspect)
                         } else {
@@ -431,7 +517,7 @@ fn handle_image_interaction(
                         }
                     }
                     ResizeHandle::NE => {
-                        if shift {
+                        if lock_ratio {
                             let w = start_w + dx;
                             (w, w * aspect)
                         } else {
@@ -439,7 +525,7 @@ fn handle_image_interaction(
                         }
                     }
                     ResizeHandle::NW => {
-                        if shift {
+                        if lock_ratio {
                             let w = start_w - dx;
                             (w, w * aspect)
                         } else {
@@ -456,16 +542,9 @@ fn handle_image_interaction(
             return true;
         }
 
-        let move_data = canvas
-            .move_drag
-            .as_ref()
-            .map(|d| (d.image_id, d.start_ptr, d.start_x_points, d.start_y_points));
-        if let Some((image_id, start_ptr, start_x, start_y)) = move_data {
+        if let Some(move_drag) = canvas.move_drag.as_mut() {
             if let Some(pointer_pos) = response.interact_pointer_pos() {
-                let zoom = canvas.zoom.max(0.01);
-                let dx = (pointer_pos.x - start_ptr.x) / zoom;
-                let dy = (pointer_pos.y - start_ptr.y) / zoom;
-                document.set_image_offset_by_id(image_id, start_x + dx, start_y + dy);
+                move_drag.current_ptr = pointer_pos;
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             }
             return true;
@@ -507,12 +586,14 @@ fn handle_image_interaction(
                     .iter()
                     .flatten()
                     .find(|img| img.id == image_id)
-                    .map(|img| (img.offset_x_points, img.offset_y_points))
+                    .map(|img| (img.offset_x_points(), img.offset_y_points()))
                     .unwrap_or((0.0, 0.0));
                 canvas.resize_drag = None;
                 canvas.move_drag = Some(ImageMoveDrag {
                     image_id,
                     start_ptr: pointer_pos,
+                    current_ptr: pointer_pos,
+                    start_rect: image_rect,
                     start_x_points: offset.0,
                     start_y_points: offset.1,
                 });
@@ -669,8 +750,8 @@ fn layout_document(
         let mut tight_wrap_image_spec: Option<(f32, f32, f32, f32)> = None;
         if let Some(image) = paragraph.image.clone().filter(|_| !has_visible_text) {
             let wrap_mode = image.wrap_mode;
-            let image_offset_x_points = image.offset_x_points;
-            let image_offset_y_points = image.offset_y_points;
+            let image_offset_x_points = image.offset_x_points();
+            let image_offset_y_points = image.offset_y_points();
             let display_size = image_display_size(&image, paragraph_wrap_width, canvas.zoom);
             let reservation = block_image_reservation(
                 wrap_mode,
@@ -858,10 +939,12 @@ fn block_image_reservation(
                 image_offset: egui::vec2(tight_pad, 0.0),
             }
         }
-        WrapMode::Through => BlockImageReservation {
-            row_size: egui::Vec2::ZERO,
-            image_offset: egui::Vec2::ZERO,
-        },
+        WrapMode::Through | WrapMode::BehindText | WrapMode::InFrontOfText => {
+            BlockImageReservation {
+                row_size: egui::Vec2::ZERO,
+                image_offset: egui::Vec2::ZERO,
+            }
+        }
         WrapMode::TopAndBottom => BlockImageReservation {
             row_size: egui::vec2(wrap_width, image_size.y),
             image_offset: egui::vec2(((wrap_width - image_size.x) * 0.5).max(0.0), 0.0),
@@ -928,10 +1011,10 @@ fn tight_wrap_zones(galley: &egui::Galley, images: &[ImageLayout], zoom: f32) ->
 
         let image_left = row.pos.x
             + image.offset.x
-            + document_points_to_screen_points(image.image.offset_x_points, zoom);
+            + document_points_to_screen_points(image.image.offset_x_points(), zoom);
         let image_top = row.pos.y
             + image.offset.y
-            + document_points_to_screen_points(image.image.offset_y_points, zoom);
+            + document_points_to_screen_points(image.image.offset_y_points(), zoom);
         let image_right = image_left + image.size.x;
         let image_bottom = image_top + image.size.y;
         let left_width = (image_left - tight_pad).max(0.0);
@@ -1080,8 +1163,8 @@ mod tests {
     use crate::{
         app::CanvasState,
         document::{
-            CharacterStyle, DocumentImage, DocumentState, ImageRendering, ListKind, PageMargins,
-            PageSize, ParagraphAlignment, ParagraphStyle, TextRun, WrapMode,
+            CharacterStyle, DocumentImage, DocumentState, ImageLayoutMode, ImageRendering,
+            ListKind, PageMargins, PageSize, ParagraphAlignment, ParagraphStyle, TextRun, WrapMode,
             OBJECT_REPLACEMENT_CHAR,
         },
     };
@@ -1115,6 +1198,27 @@ mod tests {
             paragraph_images,
             page_size: PageSize::a4(),
             margins: PageMargins::standard(),
+        }
+    }
+
+    fn make_test_image(id: usize, width: f32, height: f32, wrap_mode: WrapMode) -> DocumentImage {
+        DocumentImage {
+            id,
+            bytes: vec![],
+            alt_text: "test".to_owned(),
+            width_points: width,
+            height_points: height,
+            lock_aspect_ratio: true,
+            opacity: 1.0,
+            layout_mode: ImageLayoutMode::Inline,
+            wrap_mode,
+            rendering: ImageRendering::Smooth,
+            horizontal_position: Default::default(),
+            vertical_position: Default::default(),
+            distance_from_text: Default::default(),
+            z_index: 0,
+            move_with_text: true,
+            allow_overlap: false,
         }
     }
 
@@ -1201,18 +1305,7 @@ mod tests {
                 style: CharacterStyle::default(),
             }],
             vec![ParagraphStyle::default()],
-            vec![Some(DocumentImage {
-                id: 1,
-                bytes: vec![],
-                alt_text: "test image".to_owned(),
-                width_points: 200.0,
-                height_points: 100.0,
-                opacity: 1.0,
-                wrap_mode: WrapMode::Inline,
-                rendering: ImageRendering::Smooth,
-                offset_x_points: 0.0,
-                offset_y_points: 0.0,
-            })],
+            vec![Some(make_test_image(1, 200.0, 100.0, WrapMode::Inline))],
         );
         let canvas = CanvasState::default();
         let layout = run_headless_layout(&document, &canvas, 600.0);
@@ -1302,18 +1395,7 @@ mod tests {
             ],
             vec![
                 None,
-                Some(DocumentImage {
-                    id: 2,
-                    bytes: vec![],
-                    alt_text: "diagram".to_owned(),
-                    width_points: 400.0,
-                    height_points: 300.0,
-                    opacity: 1.0,
-                    wrap_mode: WrapMode::Inline,
-                    rendering: ImageRendering::Smooth,
-                    offset_x_points: 0.0,
-                    offset_y_points: 0.0,
-                }),
+                Some(make_test_image(2, 400.0, 300.0, WrapMode::Inline)),
                 None,
             ],
         );
@@ -1368,18 +1450,7 @@ mod tests {
                     style: CharacterStyle::default(),
                 }],
                 vec![ParagraphStyle::default()],
-                vec![Some(DocumentImage {
-                    id: 10,
-                    bytes: vec![],
-                    alt_text: "wrapped".to_owned(),
-                    width_points: 180.0,
-                    height_points: 90.0,
-                    opacity: 1.0,
-                    wrap_mode,
-                    rendering: ImageRendering::Smooth,
-                    offset_x_points: 0.0,
-                    offset_y_points: 0.0,
-                })],
+                vec![Some(make_test_image(10, 180.0, 90.0, wrap_mode))],
             )
         };
 
@@ -1427,7 +1498,9 @@ mod tests {
 
     #[test]
     fn tight_wrap_chooses_side_from_image_position() {
-        let make_doc = |offset_x_points: f32| {
+        let make_doc = |offset_x: f32| {
+            let mut img = make_test_image(21, 180.0, 90.0, WrapMode::Tight);
+            img.horizontal_position.offset_points = offset_x;
             make_document(
                 vec![TextRun {
                     text: format!(
@@ -1437,18 +1510,7 @@ mod tests {
                 }],
                 vec![ParagraphStyle::default(), ParagraphStyle::default()],
                 vec![
-                    Some(DocumentImage {
-                        id: 21,
-                        bytes: vec![],
-                        alt_text: "tight".to_owned(),
-                        width_points: 180.0,
-                        height_points: 90.0,
-                        opacity: 1.0,
-                        wrap_mode: WrapMode::Tight,
-                        rendering: ImageRendering::Smooth,
-                        offset_x_points,
-                        offset_y_points: 0.0,
-                    }),
+                    Some(img),
                     None,
                 ],
             )
@@ -1470,7 +1532,9 @@ mod tests {
 
     #[test]
     fn tight_wrap_vertical_offset_delays_text_wrapping() {
-        let make_doc = |offset_y_points: f32| {
+        let make_doc = |offset_y: f32| {
+            let mut img = make_test_image(22, 180.0, 90.0, WrapMode::Tight);
+            img.vertical_position.offset_points = offset_y;
             make_document(
                 vec![TextRun {
                     text: format!(
@@ -1480,18 +1544,7 @@ mod tests {
                 }],
                 vec![ParagraphStyle::default(), ParagraphStyle::default()],
                 vec![
-                    Some(DocumentImage {
-                        id: 22,
-                        bytes: vec![],
-                        alt_text: "tight-y".to_owned(),
-                        width_points: 180.0,
-                        height_points: 90.0,
-                        opacity: 1.0,
-                        wrap_mode: WrapMode::Tight,
-                        rendering: ImageRendering::Smooth,
-                        offset_x_points: 0.0,
-                        offset_y_points,
-                    }),
+                    Some(img),
                     None,
                 ],
             )

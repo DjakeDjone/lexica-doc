@@ -120,6 +120,8 @@ pub struct ImageResizeDrag {
 pub struct ImageMoveDrag {
     pub image_id: usize,
     pub start_ptr: egui::Pos2,
+    pub current_ptr: egui::Pos2,
+    pub start_rect: egui::Rect,
     pub start_x_points: f32,
     pub start_y_points: f32,
 }

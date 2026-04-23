@@ -164,6 +164,50 @@ fn parse_document_xml(
                 b"pgSz" => page_size = parse_page_size(&event),
                 b"pgMar" => margins = parse_page_margins(&event),
                 b"drawing" | b"pict" => current_drawing = Some(DrawingState::default()),
+                b"anchor" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.is_anchor = true;
+                        // Parse distance-from-text attributes on the anchor element
+                        drawing.distance_from_text = parse_anchor_distance(&event);
+                        // behindDoc attribute determines behind-text vs normal
+                        if attr_value(&event, b"behindDoc").as_deref() == Some("1") {
+                            drawing.wrap_mode = Some(crate::document::WrapMode::BehindText);
+                        }
+                    }
+                }
+                b"inline" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.is_anchor = false;
+                    }
+                }
+                b"wrapSquare" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.wrap_mode = Some(crate::document::WrapMode::Square);
+                    }
+                }
+                b"wrapTight" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.wrap_mode = Some(crate::document::WrapMode::Tight);
+                    }
+                }
+                b"wrapThrough" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.wrap_mode = Some(crate::document::WrapMode::Through);
+                    }
+                }
+                b"wrapTopAndBottom" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.wrap_mode = Some(crate::document::WrapMode::TopAndBottom);
+                    }
+                }
+                b"wrapNone" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        // wrapNone means no text wrapping — could be behind or in-front
+                        if drawing.wrap_mode.is_none() {
+                            drawing.wrap_mode = Some(crate::document::WrapMode::InFrontOfText);
+                        }
+                    }
+                }
                 b"docPr" => {
                     if let Some(drawing) = current_drawing.as_mut() {
                         drawing.alt_text = attr_value(&event, b"descr")
@@ -230,6 +274,33 @@ fn parse_document_xml(
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),
                 b"pgSz" => page_size = parse_page_size(&event),
                 b"pgMar" => margins = parse_page_margins(&event),
+                b"wrapSquare" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.wrap_mode = Some(crate::document::WrapMode::Square);
+                    }
+                }
+                b"wrapTight" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.wrap_mode = Some(crate::document::WrapMode::Tight);
+                    }
+                }
+                b"wrapThrough" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.wrap_mode = Some(crate::document::WrapMode::Through);
+                    }
+                }
+                b"wrapTopAndBottom" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        drawing.wrap_mode = Some(crate::document::WrapMode::TopAndBottom);
+                    }
+                }
+                b"wrapNone" => {
+                    if let Some(drawing) = current_drawing.as_mut() {
+                        if drawing.wrap_mode.is_none() {
+                            drawing.wrap_mode = Some(crate::document::WrapMode::InFrontOfText);
+                        }
+                    }
+                }
                 b"docPr" => {
                     if let Some(drawing) = current_drawing.as_mut() {
                         drawing.alt_text = attr_value(&event, b"descr")
@@ -365,6 +436,9 @@ struct DrawingState {
     rel_id: Option<String>,
     alt_text: Option<String>,
     size_points: Option<(f32, f32)>,
+    is_anchor: bool,
+    wrap_mode: Option<crate::document::WrapMode>,
+    distance_from_text: Option<crate::document::DistanceFromText>,
 }
 
 fn parse_numbering_xml(numbering_xml: &str) -> Result<NumberingDefinitions, String> {
@@ -519,17 +593,37 @@ fn resolve_drawing(
             .to_owned()
     });
 
+    let layout_mode = if drawing.is_anchor {
+        crate::document::ImageLayoutMode::Floating
+    } else {
+        crate::document::ImageLayoutMode::Inline
+    };
+    let wrap_mode = drawing.wrap_mode.unwrap_or(if drawing.is_anchor {
+        crate::document::WrapMode::Square
+    } else {
+        crate::document::WrapMode::Inline
+    });
+    let distance_from_text = drawing
+        .distance_from_text
+        .unwrap_or_default();
+
     let image = DocumentImage {
         id: *next_image_id,
         bytes,
         alt_text,
         width_points,
         height_points,
+        lock_aspect_ratio: true,
         opacity: 1.0,
-        wrap_mode: crate::document::WrapMode::Inline,
+        layout_mode,
+        wrap_mode,
         rendering: crate::document::ImageRendering::Smooth,
-        offset_x_points: 0.0,
-        offset_y_points: 0.0,
+        horizontal_position: Default::default(),
+        vertical_position: Default::default(),
+        distance_from_text,
+        z_index: 0,
+        move_with_text: true,
+        allow_overlap: false,
     };
     *next_image_id += 1;
     Some(image)
@@ -647,6 +741,33 @@ fn twips_to_points(value: f32) -> f32 {
 
 fn emu_to_points(value: f32) -> f32 {
     value / 12_700.0
+}
+
+fn parse_anchor_distance(
+    event: &quick_xml::events::BytesStart<'_>,
+) -> Option<crate::document::DistanceFromText> {
+    let top = attr_value(event, b"distT")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(emu_to_points)
+        .unwrap_or(0.0);
+    let bottom = attr_value(event, b"distB")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(emu_to_points)
+        .unwrap_or(0.0);
+    let left = attr_value(event, b"distL")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(emu_to_points)
+        .unwrap_or(8.0);
+    let right = attr_value(event, b"distR")
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(emu_to_points)
+        .unwrap_or(8.0);
+    Some(crate::document::DistanceFromText {
+        top_points: top,
+        right_points: right,
+        bottom_points: bottom,
+        left_points: left,
+    })
 }
 
 #[cfg(test)]

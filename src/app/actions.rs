@@ -452,11 +452,17 @@ fn load_image_for_document(
             .to_owned(),
         width_points,
         height_points,
+        lock_aspect_ratio: true,
         opacity: 1.0,
+        layout_mode: crate::document::ImageLayoutMode::Inline,
         wrap_mode: crate::document::WrapMode::Inline,
         rendering: crate::document::ImageRendering::Smooth,
-        offset_x_points: 0.0,
-        offset_y_points: 0.0,
+        horizontal_position: Default::default(),
+        vertical_position: Default::default(),
+        distance_from_text: Default::default(),
+        z_index: 0,
+        move_with_text: true,
+        allow_overlap: false,
     })
 }
 
