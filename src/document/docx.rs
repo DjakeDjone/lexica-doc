@@ -9,10 +9,16 @@ use quick_xml::{events::Event as XmlEvent, Reader};
 use zip::ZipArchive;
 
 use crate::document::{
-    CharacterStyle, DocumentImage, ListKind, PageMargins, PageSize, ParagraphAlignment,
-    ParagraphStyle, TextRun, OBJECT_REPLACEMENT_CHAR,
+    CharacterStyle, DocumentImage, FontChoice, LineSpacing, LineSpacingKind, ListKind, PageMargins,
+    PageSize, ParagraphAlignment, ParagraphStyle, TextRun, OBJECT_REPLACEMENT_CHAR,
 };
 use serde::Serialize;
+
+const DOCX_CARLITO: &str = "docx-carlito";
+const DOCX_CALADEA: &str = "docx-caladea";
+const DOCX_LIBERATION_SANS: &str = "docx-liberation-sans";
+const DOCX_LIBERATION_SERIF: &str = "docx-liberation-serif";
+const DOCX_LIBERATION_MONO: &str = "docx-liberation-mono";
 
 #[derive(Debug, Serialize)]
 pub struct ImportedDocx {
@@ -35,9 +41,18 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
         .map_err(|error| format!("failed to read word/document.xml: {error}"))?;
 
     let numbering = load_numbering_definitions(&mut archive)?;
+    let theme_fonts = load_theme_fonts(&mut archive)?;
+    let styles = load_styles(&mut archive, &theme_fonts)?;
     let relationships = load_document_relationships(&mut archive)?;
     let media = load_media_store(&mut archive, &relationships)?;
-    parse_document_xml(&document_xml, &numbering, &relationships, &media)
+    parse_document_xml(
+        &document_xml,
+        &numbering,
+        &styles,
+        &theme_fonts,
+        &relationships,
+        &media,
+    )
 }
 
 fn load_numbering_definitions(
@@ -68,6 +83,33 @@ fn load_document_relationships(
     parse_document_relationships(&relationships_xml)
 }
 
+fn load_styles(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    theme_fonts: &ThemeFonts,
+) -> Result<DocxStyles, String> {
+    let Ok(mut styles_file) = archive.by_name("word/styles.xml") else {
+        return Ok(DocxStyles::default());
+    };
+
+    let mut styles_xml = String::new();
+    styles_file
+        .read_to_string(&mut styles_xml)
+        .map_err(|error| format!("failed to read word/styles.xml: {error}"))?;
+    parse_styles_xml(&styles_xml, theme_fonts)
+}
+
+fn load_theme_fonts(archive: &mut ZipArchive<Cursor<&[u8]>>) -> Result<ThemeFonts, String> {
+    let Ok(mut theme_file) = archive.by_name("word/theme/theme1.xml") else {
+        return Ok(ThemeFonts::default());
+    };
+
+    let mut theme_xml = String::new();
+    theme_file
+        .read_to_string(&mut theme_xml)
+        .map_err(|error| format!("failed to read word/theme/theme1.xml: {error}"))?;
+    parse_theme_xml(&theme_xml)
+}
+
 fn load_media_store(
     archive: &mut ZipArchive<Cursor<&[u8]>>,
     relationships: &DocumentRelationships,
@@ -90,6 +132,8 @@ fn load_media_store(
 fn parse_document_xml(
     document_xml: &str,
     numbering: &NumberingDefinitions,
+    styles: &DocxStyles,
+    theme_fonts: &ThemeFonts,
     relationships: &DocumentRelationships,
     media: &HashMap<String, Vec<u8>>,
 ) -> Result<ImportedDocx, String> {
@@ -99,8 +143,9 @@ fn parse_document_xml(
     let mut runs = Vec::new();
     let mut paragraph_styles = Vec::new();
     let mut paragraph_images = Vec::new();
-    let mut run_style = CharacterStyle::default();
-    let mut paragraph_style = ParagraphStyle::default();
+    let mut paragraph_run_style = styles.default_run_style();
+    let mut run_style = paragraph_run_style;
+    let mut paragraph_style = styles.default_paragraph_style();
     let mut current_paragraph_image = None;
     let mut in_text = false;
     let mut current_num_id = None;
@@ -117,17 +162,34 @@ fn parse_document_xml(
                     if !paragraph_styles.is_empty() {
                         append_plain(&mut runs, "\n", CharacterStyle::default());
                     }
-                    paragraph_style = ParagraphStyle::default();
+                    paragraph_style = styles.default_paragraph_style();
+                    paragraph_run_style = styles.default_run_style();
                     current_paragraph_image = None;
                     current_num_id = None;
                     current_ilvl = None;
                 }
                 b"r" => {
-                    run_style = CharacterStyle::default();
+                    run_style = paragraph_run_style;
                 }
                 b"t" => in_text = true,
-                b"br" => append_plain(&mut runs, "\n", run_style),
+                b"br" | b"cr" => append_plain(&mut runs, "\n", run_style),
                 b"tab" => append_plain(&mut runs, "\t", run_style),
+                b"pStyle" => {
+                    if let Some(style_id) = attr_value(&event, b"val") {
+                        styles.apply_paragraph_style(&style_id, &mut paragraph_style);
+                        paragraph_run_style = styles.run_style_for_paragraph(&style_id);
+                    }
+                }
+                b"rStyle" => {
+                    if let Some(style_id) = attr_value(&event, b"val") {
+                        run_style = styles.apply_run_style(&style_id, run_style);
+                    }
+                }
+                b"rFonts" => {
+                    if let Some(font) = resolve_rfonts(&event, theme_fonts) {
+                        apply_resolved_font(&mut run_style, font);
+                    }
+                }
                 b"b" => run_style.bold = docx_flag(&event, true),
                 b"i" => run_style.italic = docx_flag(&event, true),
                 b"u" => {
@@ -159,6 +221,8 @@ fn parse_document_xml(
                         attr_value(&event, b"val").as_deref().unwrap_or_default(),
                     );
                 }
+                b"spacing" => apply_spacing(&event, &mut paragraph_style),
+                b"pageBreakBefore" => paragraph_style.page_break_before = docx_flag(&event, true),
                 b"numId" => current_num_id = attr_value(&event, b"val"),
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),
                 b"pgSz" => page_size = parse_page_size(&event),
@@ -237,8 +301,24 @@ fn parse_document_xml(
                 _ => {}
             },
             Ok(XmlEvent::Empty(event)) => match local_name(event.name().as_ref()) {
-                b"br" => append_plain(&mut runs, "\n", run_style),
+                b"br" | b"cr" => append_plain(&mut runs, "\n", run_style),
                 b"tab" => append_plain(&mut runs, "\t", run_style),
+                b"pStyle" => {
+                    if let Some(style_id) = attr_value(&event, b"val") {
+                        styles.apply_paragraph_style(&style_id, &mut paragraph_style);
+                        paragraph_run_style = styles.run_style_for_paragraph(&style_id);
+                    }
+                }
+                b"rStyle" => {
+                    if let Some(style_id) = attr_value(&event, b"val") {
+                        run_style = styles.apply_run_style(&style_id, run_style);
+                    }
+                }
+                b"rFonts" => {
+                    if let Some(font) = resolve_rfonts(&event, theme_fonts) {
+                        apply_resolved_font(&mut run_style, font);
+                    }
+                }
                 b"b" => run_style.bold = docx_flag(&event, true),
                 b"i" => run_style.italic = docx_flag(&event, true),
                 b"u" => {
@@ -270,6 +350,8 @@ fn parse_document_xml(
                         attr_value(&event, b"val").as_deref().unwrap_or_default(),
                     );
                 }
+                b"spacing" => apply_spacing(&event, &mut paragraph_style),
+                b"pageBreakBefore" => paragraph_style.page_break_before = docx_flag(&event, true),
                 b"numId" => current_num_id = attr_value(&event, b"val"),
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),
                 b"pgSz" => page_size = parse_page_size(&event),
@@ -441,6 +523,610 @@ struct DrawingState {
     distance_from_text: Option<crate::document::DistanceFromText>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResolvedFont {
+    font_family_name: Option<&'static str>,
+    font_choice: FontChoice,
+}
+
+#[derive(Default)]
+struct ThemeFonts {
+    major_latin: Option<String>,
+    minor_latin: Option<String>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct CharacterStylePatch {
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    strikethrough: Option<bool>,
+    font_size_points: Option<f32>,
+    font: Option<ResolvedFont>,
+    text_color: Option<Color32>,
+    highlight_color: Option<Color32>,
+}
+
+impl CharacterStylePatch {
+    fn apply(self, mut style: CharacterStyle) -> CharacterStyle {
+        if let Some(value) = self.bold {
+            style.bold = value;
+        }
+        if let Some(value) = self.italic {
+            style.italic = value;
+        }
+        if let Some(value) = self.underline {
+            style.underline = value;
+        }
+        if let Some(value) = self.strikethrough {
+            style.strikethrough = value;
+        }
+        if let Some(value) = self.font_size_points {
+            style.font_size_points = value;
+        }
+        if let Some(value) = self.font {
+            style.font_family_name = value.font_family_name;
+            style.font_choice = value.font_choice;
+        }
+        if let Some(value) = self.text_color {
+            style.text_color = value;
+        }
+        if let Some(value) = self.highlight_color {
+            style.highlight_color = value;
+        }
+        style
+    }
+
+    fn overlay(&mut self, other: Self) {
+        if other.bold.is_some() {
+            self.bold = other.bold;
+        }
+        if other.italic.is_some() {
+            self.italic = other.italic;
+        }
+        if other.underline.is_some() {
+            self.underline = other.underline;
+        }
+        if other.strikethrough.is_some() {
+            self.strikethrough = other.strikethrough;
+        }
+        if other.font_size_points.is_some() {
+            self.font_size_points = other.font_size_points;
+        }
+        if other.font.is_some() {
+            self.font = other.font;
+        }
+        if other.text_color.is_some() {
+            self.text_color = other.text_color;
+        }
+        if other.highlight_color.is_some() {
+            self.highlight_color = other.highlight_color;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct ParagraphStylePatch {
+    alignment: Option<ParagraphAlignment>,
+    page_break_before: Option<bool>,
+    spacing_before_points: Option<u16>,
+    spacing_after_points: Option<u16>,
+    line_spacing: Option<LineSpacing>,
+}
+
+impl ParagraphStylePatch {
+    fn apply(self, mut style: ParagraphStyle) -> ParagraphStyle {
+        if let Some(value) = self.alignment {
+            style.alignment = value;
+        }
+        if let Some(value) = self.page_break_before {
+            style.page_break_before = value;
+        }
+        if let Some(value) = self.spacing_before_points {
+            style.spacing_before_points = value;
+        }
+        if let Some(value) = self.spacing_after_points {
+            style.spacing_after_points = value;
+        }
+        if let Some(value) = self.line_spacing {
+            style.line_spacing = value;
+        }
+        style
+    }
+
+    fn overlay(&mut self, other: Self) {
+        if other.alignment.is_some() {
+            self.alignment = other.alignment;
+        }
+        if other.page_break_before.is_some() {
+            self.page_break_before = other.page_break_before;
+        }
+        if other.spacing_before_points.is_some() {
+            self.spacing_before_points = other.spacing_before_points;
+        }
+        if other.spacing_after_points.is_some() {
+            self.spacing_after_points = other.spacing_after_points;
+        }
+        if other.line_spacing.is_some() {
+            self.line_spacing = other.line_spacing;
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct RawParagraphStyleDefinition {
+    based_on: Option<String>,
+    paragraph: ParagraphStylePatch,
+    run: CharacterStylePatch,
+}
+
+#[derive(Clone, Default)]
+struct RawCharacterStyleDefinition {
+    based_on: Option<String>,
+    run: CharacterStylePatch,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ResolvedParagraphStyle {
+    paragraph: ParagraphStylePatch,
+    run: CharacterStylePatch,
+}
+
+#[derive(Default)]
+struct RawDocxStyles {
+    default_paragraph: ParagraphStylePatch,
+    default_run: CharacterStylePatch,
+    paragraph_styles: HashMap<String, RawParagraphStyleDefinition>,
+    character_styles: HashMap<String, RawCharacterStyleDefinition>,
+}
+
+#[derive(Default)]
+struct DocxStyles {
+    default_paragraph: ParagraphStyle,
+    default_run: CharacterStyle,
+    paragraph_styles: HashMap<String, ResolvedParagraphStyle>,
+    character_styles: HashMap<String, CharacterStylePatch>,
+}
+
+impl DocxStyles {
+    fn default_paragraph_style(&self) -> ParagraphStyle {
+        self.default_paragraph
+    }
+
+    fn default_run_style(&self) -> CharacterStyle {
+        self.default_run
+    }
+
+    fn apply_paragraph_style(&self, style_id: &str, style: &mut ParagraphStyle) {
+        if let Some(resolved) = self.paragraph_styles.get(style_id) {
+            *style = resolved.paragraph.apply(*style);
+        }
+    }
+
+    fn run_style_for_paragraph(&self, style_id: &str) -> CharacterStyle {
+        self.paragraph_styles
+            .get(style_id)
+            .map(|resolved| resolved.run.apply(self.default_run_style()))
+            .unwrap_or_else(|| self.default_run_style())
+    }
+
+    fn apply_run_style(&self, style_id: &str, base: CharacterStyle) -> CharacterStyle {
+        self.character_styles
+            .get(style_id)
+            .copied()
+            .map(|style| style.apply(base))
+            .unwrap_or(base)
+    }
+}
+
+fn parse_theme_xml(theme_xml: &str) -> Result<ThemeFonts, String> {
+    let mut reader = Reader::from_str(theme_xml);
+    reader.config_mut().trim_text(false);
+
+    let mut theme_fonts = ThemeFonts::default();
+    let mut in_major_font = false;
+    let mut in_minor_font = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(XmlEvent::Start(event)) | Ok(XmlEvent::Empty(event)) => {
+                match local_name(event.name().as_ref()) {
+                    b"majorFont" => in_major_font = true,
+                    b"minorFont" => in_minor_font = true,
+                    b"latin" => {
+                        let typeface = attr_value(&event, b"typeface")
+                            .filter(|value| !value.trim().is_empty());
+                        if in_major_font {
+                            theme_fonts.major_latin = typeface;
+                        } else if in_minor_font {
+                            theme_fonts.minor_latin = typeface;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(XmlEvent::End(event)) => match local_name(event.name().as_ref()) {
+                b"majorFont" => in_major_font = false,
+                b"minorFont" => in_minor_font = false,
+                _ => {}
+            },
+            Ok(XmlEvent::Eof) => break,
+            Err(error) => return Err(format!("failed to parse word/theme/theme1.xml: {error}")),
+            _ => {}
+        }
+    }
+
+    Ok(theme_fonts)
+}
+
+fn apply_resolved_font(style: &mut CharacterStyle, font: ResolvedFont) {
+    style.font_family_name = font.font_family_name;
+    style.font_choice = font.font_choice;
+}
+
+fn resolve_rfonts(
+    event: &quick_xml::events::BytesStart<'_>,
+    theme_fonts: &ThemeFonts,
+) -> Option<ResolvedFont> {
+    for key in [b"ascii".as_slice(), b"hAnsi", b"cs", b"eastAsia"] {
+        if let Some(value) = attr_value(event, key).filter(|value| !value.trim().is_empty()) {
+            return Some(resolve_font_name(&value));
+        }
+    }
+
+    for key in [
+        b"asciiTheme".as_slice(),
+        b"hAnsiTheme",
+        b"csTheme",
+        b"eastAsiaTheme",
+    ] {
+        if let Some(value) = attr_value(event, key).filter(|value| !value.trim().is_empty()) {
+            return resolve_theme_font(&value, theme_fonts);
+        }
+    }
+
+    None
+}
+
+fn resolve_theme_font(slot: &str, theme_fonts: &ThemeFonts) -> Option<ResolvedFont> {
+    let font_name = match slot {
+        "majorAscii" | "majorHAnsi" | "majorBidi" | "majorEastAsia" => {
+            theme_fonts.major_latin.as_deref()
+        }
+        "minorAscii" | "minorHAnsi" | "minorBidi" | "minorEastAsia" => {
+            theme_fonts.minor_latin.as_deref()
+        }
+        _ => None,
+    }?;
+    Some(resolve_font_name(font_name))
+}
+
+fn resolve_font_name(name: &str) -> ResolvedFont {
+    let normalized = name.trim().to_ascii_lowercase();
+    let family_name = match normalized.as_str() {
+        "calibri" | "calibri light" | "aptos" | "aptos display" => Some(DOCX_CARLITO),
+        "cambria" => Some(DOCX_CALADEA),
+        "arial" => Some(DOCX_LIBERATION_SANS),
+        "times new roman" => Some(DOCX_LIBERATION_SERIF),
+        "courier new" | "consolas" => Some(DOCX_LIBERATION_MONO),
+        _ => None,
+    };
+
+    let monospace = matches!(
+        normalized.as_str(),
+        "courier new" | "consolas" | "menlo" | "monaco" | "source code pro"
+    ) || normalized.contains("mono");
+
+    ResolvedFont {
+        font_family_name: family_name,
+        font_choice: if monospace {
+            FontChoice::Monospace
+        } else {
+            FontChoice::Proportional
+        },
+    }
+}
+
+fn parse_styles_xml(styles_xml: &str, theme_fonts: &ThemeFonts) -> Result<DocxStyles, String> {
+    let mut reader = Reader::from_str(styles_xml);
+    reader.config_mut().trim_text(false);
+
+    let mut raw = RawDocxStyles::default();
+    let mut current_style_id = None::<String>;
+    let mut current_style_type = None::<String>;
+    let mut current_paragraph_style = RawParagraphStyleDefinition::default();
+    let mut current_character_style = RawCharacterStyleDefinition::default();
+    let mut in_doc_defaults = false;
+    let mut in_doc_defaults_paragraph = false;
+    let mut in_doc_defaults_run = false;
+    let mut in_style_paragraph = false;
+    let mut in_style_run = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(XmlEvent::Start(event)) => match local_name(event.name().as_ref()) {
+                b"docDefaults" => in_doc_defaults = true,
+                b"style" => {
+                    current_style_id = attr_value(&event, b"styleId");
+                    current_style_type = attr_value(&event, b"type");
+                    current_paragraph_style = RawParagraphStyleDefinition::default();
+                    current_character_style = RawCharacterStyleDefinition::default();
+                }
+                b"basedOn" => {
+                    let based_on = attr_value(&event, b"val");
+                    match current_style_type.as_deref() {
+                        Some("paragraph") => current_paragraph_style.based_on = based_on,
+                        Some("character") => current_character_style.based_on = based_on,
+                        _ => {}
+                    }
+                }
+                b"pPr" => {
+                    if in_doc_defaults {
+                        in_doc_defaults_paragraph = true;
+                    } else if current_style_type.as_deref() == Some("paragraph") {
+                        in_style_paragraph = true;
+                    }
+                }
+                b"rPr" => {
+                    if in_doc_defaults {
+                        in_doc_defaults_run = true;
+                    } else if current_style_id.is_some() {
+                        in_style_run = true;
+                    }
+                }
+                name => {
+                    if in_doc_defaults_paragraph {
+                        apply_paragraph_style_patch_event(name, &event, &mut raw.default_paragraph);
+                    }
+                    if in_doc_defaults_run {
+                        apply_run_style_patch_event(
+                            name,
+                            &event,
+                            &mut raw.default_run,
+                            theme_fonts,
+                        );
+                    }
+                    if in_style_run {
+                        match current_style_type.as_deref() {
+                            Some("paragraph") => apply_run_style_patch_event(
+                                name,
+                                &event,
+                                &mut current_paragraph_style.run,
+                                theme_fonts,
+                            ),
+                            Some("character") => apply_run_style_patch_event(
+                                name,
+                                &event,
+                                &mut current_character_style.run,
+                                theme_fonts,
+                            ),
+                            _ => {}
+                        }
+                    }
+                    if in_style_paragraph {
+                        apply_paragraph_style_patch_event(
+                            name,
+                            &event,
+                            &mut current_paragraph_style.paragraph,
+                        );
+                    }
+                }
+            },
+            Ok(XmlEvent::Empty(event)) => match local_name(event.name().as_ref()) {
+                b"basedOn" => {
+                    let based_on = attr_value(&event, b"val");
+                    match current_style_type.as_deref() {
+                        Some("paragraph") => current_paragraph_style.based_on = based_on,
+                        Some("character") => current_character_style.based_on = based_on,
+                        _ => {}
+                    }
+                }
+                name => {
+                    if in_doc_defaults && name == b"rPr" {
+                        continue;
+                    }
+                    if in_doc_defaults_paragraph {
+                        apply_paragraph_style_patch_event(name, &event, &mut raw.default_paragraph);
+                    }
+                    if in_doc_defaults_run {
+                        apply_run_style_patch_event(
+                            name,
+                            &event,
+                            &mut raw.default_run,
+                            theme_fonts,
+                        );
+                    }
+                    if in_style_run {
+                        match current_style_type.as_deref() {
+                            Some("paragraph") => apply_run_style_patch_event(
+                                name,
+                                &event,
+                                &mut current_paragraph_style.run,
+                                theme_fonts,
+                            ),
+                            Some("character") => apply_run_style_patch_event(
+                                name,
+                                &event,
+                                &mut current_character_style.run,
+                                theme_fonts,
+                            ),
+                            _ => {}
+                        }
+                    }
+                    if in_style_paragraph {
+                        apply_paragraph_style_patch_event(
+                            name,
+                            &event,
+                            &mut current_paragraph_style.paragraph,
+                        );
+                    }
+                }
+            },
+            Ok(XmlEvent::End(event)) => match local_name(event.name().as_ref()) {
+                b"docDefaults" => in_doc_defaults = false,
+                b"rPr" => {
+                    in_doc_defaults_run = false;
+                    in_style_run = false;
+                }
+                b"pPr" => {
+                    in_doc_defaults_paragraph = false;
+                    in_style_paragraph = false;
+                }
+                b"style" => {
+                    if let Some(style_id) = current_style_id.take() {
+                        match current_style_type.as_deref() {
+                            Some("paragraph") => {
+                                raw.paragraph_styles
+                                    .insert(style_id, current_paragraph_style.clone());
+                            }
+                            Some("character") => {
+                                raw.character_styles
+                                    .insert(style_id, current_character_style.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                    current_style_type = None;
+                }
+                _ => {}
+            },
+            Ok(XmlEvent::Eof) => break,
+            Err(error) => return Err(format!("failed to parse word/styles.xml: {error}")),
+            _ => {}
+        }
+    }
+
+    Ok(resolve_styles(raw))
+}
+
+fn resolve_styles(raw: RawDocxStyles) -> DocxStyles {
+    let mut paragraph_styles = HashMap::new();
+    let mut character_styles = HashMap::new();
+
+    for style_id in raw.paragraph_styles.keys() {
+        let mut active = HashSet::new();
+        let resolved = resolve_paragraph_style(style_id, &raw, &mut active);
+        paragraph_styles.insert(style_id.clone(), resolved);
+    }
+
+    for style_id in raw.character_styles.keys() {
+        let mut active = HashSet::new();
+        let resolved = resolve_character_style(style_id, &raw, &mut active);
+        character_styles.insert(style_id.clone(), resolved);
+    }
+
+    DocxStyles {
+        default_paragraph: raw.default_paragraph.apply(ParagraphStyle::default()),
+        default_run: raw.default_run.apply(CharacterStyle::default()),
+        paragraph_styles,
+        character_styles,
+    }
+}
+
+fn resolve_paragraph_style(
+    style_id: &str,
+    raw: &RawDocxStyles,
+    active: &mut HashSet<String>,
+) -> ResolvedParagraphStyle {
+    if !active.insert(style_id.to_owned()) {
+        return ResolvedParagraphStyle::default();
+    }
+
+    let Some(style) = raw.paragraph_styles.get(style_id) else {
+        active.remove(style_id);
+        return ResolvedParagraphStyle::default();
+    };
+
+    let mut resolved = if let Some(parent) = style.based_on.as_deref() {
+        resolve_paragraph_style(parent, raw, active)
+    } else {
+        ResolvedParagraphStyle::default()
+    };
+    resolved.paragraph.overlay(style.paragraph);
+    resolved.run.overlay(style.run);
+    active.remove(style_id);
+    resolved
+}
+
+fn resolve_character_style(
+    style_id: &str,
+    raw: &RawDocxStyles,
+    active: &mut HashSet<String>,
+) -> CharacterStylePatch {
+    if !active.insert(style_id.to_owned()) {
+        return CharacterStylePatch::default();
+    }
+
+    let Some(style) = raw.character_styles.get(style_id) else {
+        active.remove(style_id);
+        return CharacterStylePatch::default();
+    };
+
+    let mut resolved = if let Some(parent) = style.based_on.as_deref() {
+        resolve_character_style(parent, raw, active)
+    } else {
+        CharacterStylePatch::default()
+    };
+    resolved.overlay(style.run);
+    active.remove(style_id);
+    resolved
+}
+
+fn apply_run_style_patch_event(
+    name: &[u8],
+    event: &quick_xml::events::BytesStart<'_>,
+    patch: &mut CharacterStylePatch,
+    theme_fonts: &ThemeFonts,
+) {
+    match name {
+        b"rFonts" => patch.font = resolve_rfonts(event, theme_fonts),
+        b"b" => patch.bold = Some(docx_flag(event, true)),
+        b"i" => patch.italic = Some(docx_flag(event, true)),
+        b"u" => {
+            patch.underline = Some(!matches!(
+                attr_value(event, b"val").as_deref(),
+                Some("none")
+            ))
+        }
+        b"strike" | b"dstrike" => patch.strikethrough = Some(docx_flag(event, true)),
+        b"sz" => {
+            if let Some(value) = attr_value(event, b"val") {
+                if let Ok(half_points) = value.parse::<f32>() {
+                    patch.font_size_points = Some((half_points / 2.0).clamp(8.0, 72.0));
+                }
+            }
+        }
+        b"color" => {
+            if let Some(value) = attr_value(event, b"val") {
+                patch.text_color = parse_hex_color(&value);
+            }
+        }
+        b"highlight" => {
+            if let Some(value) = attr_value(event, b"val") {
+                patch.highlight_color = Some(highlight_color(&value));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_paragraph_style_patch_event(
+    name: &[u8],
+    event: &quick_xml::events::BytesStart<'_>,
+    patch: &mut ParagraphStylePatch,
+) {
+    match name {
+        b"jc" => {
+            patch.alignment = Some(paragraph_alignment_for(
+                attr_value(event, b"val").as_deref().unwrap_or_default(),
+            ));
+        }
+        b"spacing" => apply_spacing_patch(event, patch),
+        b"pageBreakBefore" => patch.page_break_before = Some(docx_flag(event, true)),
+        _ => {}
+    }
+}
+
 fn parse_numbering_xml(numbering_xml: &str) -> Result<NumberingDefinitions, String> {
     let mut reader = Reader::from_str(numbering_xml);
     reader.config_mut().trim_text(false);
@@ -603,9 +1289,7 @@ fn resolve_drawing(
     } else {
         crate::document::WrapMode::Inline
     });
-    let distance_from_text = drawing
-        .distance_from_text
-        .unwrap_or_default();
+    let distance_from_text = drawing.distance_from_text.unwrap_or_default();
 
     let image = DocumentImage {
         id: *next_image_id,
@@ -711,6 +1395,61 @@ fn list_kind_for_numbering(value: &str) -> ListKind {
     }
 }
 
+fn apply_spacing(event: &quick_xml::events::BytesStart<'_>, paragraph_style: &mut ParagraphStyle) {
+    if let Some(value) = attr_value(event, b"before")
+        .and_then(|value| value.parse::<f32>().ok())
+        .map(twips_to_points)
+    {
+        paragraph_style.spacing_before_points = value.round().clamp(0.0, u16::MAX as f32) as u16;
+    }
+    if let Some(value) = attr_value(event, b"after")
+        .and_then(|value| value.parse::<f32>().ok())
+        .map(twips_to_points)
+    {
+        paragraph_style.spacing_after_points = value.round().clamp(0.0, u16::MAX as f32) as u16;
+    }
+    if let Some(line_spacing) = parse_line_spacing(event) {
+        paragraph_style.line_spacing = line_spacing;
+    }
+}
+
+fn apply_spacing_patch(event: &quick_xml::events::BytesStart<'_>, patch: &mut ParagraphStylePatch) {
+    if let Some(value) = attr_value(event, b"before")
+        .and_then(|value| value.parse::<f32>().ok())
+        .map(twips_to_points)
+    {
+        patch.spacing_before_points = Some(value.round().clamp(0.0, u16::MAX as f32) as u16);
+    }
+    if let Some(value) = attr_value(event, b"after")
+        .and_then(|value| value.parse::<f32>().ok())
+        .map(twips_to_points)
+    {
+        patch.spacing_after_points = Some(value.round().clamp(0.0, u16::MAX as f32) as u16);
+    }
+    if let Some(line_spacing) = parse_line_spacing(event) {
+        patch.line_spacing = Some(line_spacing);
+    }
+}
+
+fn parse_line_spacing(event: &quick_xml::events::BytesStart<'_>) -> Option<LineSpacing> {
+    let line = attr_value(event, b"line")?.parse::<f32>().ok()?;
+    let line_rule = attr_value(event, b"lineRule").unwrap_or_else(|| "auto".to_owned());
+    Some(match line_rule.as_str() {
+        "atLeast" => LineSpacing {
+            kind: LineSpacingKind::AtLeastPoints,
+            value: twips_to_points(line),
+        },
+        "exact" => LineSpacing {
+            kind: LineSpacingKind::ExactPoints,
+            value: twips_to_points(line),
+        },
+        _ => LineSpacing {
+            kind: LineSpacingKind::AutoMultiplier,
+            value: line / 240.0,
+        },
+    })
+}
+
 fn parse_page_size(event: &quick_xml::events::BytesStart<'_>) -> Option<PageSize> {
     let width_twips = attr_value(event, b"w")?.parse::<f32>().ok()?;
     let height_twips = attr_value(event, b"h")?.parse::<f32>().ok()?;
@@ -774,8 +1513,11 @@ fn parse_anchor_distance(
 mod tests {
     use std::collections::HashMap;
 
-    use super::{parse_document_relationships, parse_document_xml, parse_numbering_xml};
-    use crate::document::{ListKind, ParagraphAlignment, OBJECT_REPLACEMENT_CHAR};
+    use super::{
+        parse_document_relationships, parse_document_xml, parse_numbering_xml, parse_styles_xml,
+        parse_theme_xml,
+    };
+    use crate::document::{LineSpacingKind, ListKind, ParagraphAlignment, OBJECT_REPLACEMENT_CHAR};
 
     #[test]
     fn parses_lists_alignment_and_page_settings_from_docx_xml() {
@@ -835,6 +1577,8 @@ mod tests {
             "#,
             &numbering,
             &Default::default(),
+            &Default::default(),
+            &Default::default(),
             &HashMap::new(),
         )
         .unwrap();
@@ -849,6 +1593,9 @@ mod tests {
                 alignment: ParagraphAlignment::Center,
                 list_kind: ListKind::Ordered,
                 page_break_before: false,
+                spacing_before_points: 0,
+                spacing_after_points: 0,
+                line_spacing: crate::document::LineSpacing::default(),
             }
         );
         assert_eq!(imported.paragraph_styles[1].list_kind, ListKind::Bullet);
@@ -902,6 +1649,8 @@ mod tests {
             </w:document>
             "#,
             &numbering,
+            &Default::default(),
+            &Default::default(),
             &relationships,
             &HashMap::from([(String::from("word/media/image1.png"), vec![1, 2, 3, 4])]),
         )
@@ -935,6 +1684,8 @@ mod tests {
             "#,
             &numbering,
             &Default::default(),
+            &Default::default(),
+            &Default::default(),
             &HashMap::new(),
         )
         .unwrap();
@@ -946,5 +1697,215 @@ mod tests {
             imported.paragraph_styles[0].alignment,
             ParagraphAlignment::Left
         );
+    }
+
+    #[test]
+    fn resolves_word_styles_for_paragraph_spacing_and_run_formatting() {
+        let numbering = parse_numbering_xml(
+            r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#,
+        )
+        .unwrap();
+        let styles = parse_styles_xml(
+            r#"
+            <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:docDefaults>
+                <w:pPrDefault>
+                  <w:pPr>
+                    <w:spacing w:line="360"/>
+                  </w:pPr>
+                </w:pPrDefault>
+                <w:rPrDefault>
+                  <w:rPr>
+                    <w:sz w:val="22"/>
+                  </w:rPr>
+                </w:rPrDefault>
+              </w:docDefaults>
+              <w:style w:type="paragraph" w:styleId="Normal">
+                <w:pPr>
+                  <w:spacing w:after="160"/>
+                </w:pPr>
+              </w:style>
+              <w:style w:type="paragraph" w:styleId="Title">
+                <w:basedOn w:val="Normal"/>
+                <w:pPr>
+                  <w:spacing w:after="240"/>
+                </w:pPr>
+                <w:rPr>
+                  <w:rFonts w:ascii="Calibri"/>
+                  <w:b/>
+                  <w:sz w:val="56"/>
+                </w:rPr>
+              </w:style>
+              <w:style w:type="character" w:styleId="Accent">
+                <w:rPr>
+                  <w:rFonts w:ascii="Consolas"/>
+                  <w:i/>
+                </w:rPr>
+              </w:style>
+            </w:styles>
+            "#,
+            &Default::default(),
+        )
+        .unwrap();
+
+        let imported = parse_document_xml(
+            r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:p>
+                  <w:pPr><w:pStyle w:val="Title"/></w:pPr>
+                  <w:r><w:t>Heading</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:pPr><w:pStyle w:val="Normal"/></w:pPr>
+                  <w:r>
+                    <w:rPr><w:rStyle w:val="Accent"/></w:rPr>
+                    <w:t>Body</w:t>
+                  </w:r>
+                </w:p>
+              </w:body>
+            </w:document>
+            "#,
+            &numbering,
+            &styles,
+            &Default::default(),
+            &Default::default(),
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(imported.paragraph_styles[0].spacing_after_points, 12);
+        assert_eq!(imported.paragraph_styles[1].spacing_after_points, 8);
+        assert_eq!(
+            imported.paragraph_styles[1].line_spacing.kind,
+            LineSpacingKind::AutoMultiplier
+        );
+        assert_eq!(imported.paragraph_styles[1].line_spacing.value, 1.5);
+        assert_eq!(imported.runs.len(), 3);
+        assert_eq!(imported.runs[0].text, "Heading");
+        assert!(imported.runs[0].style.bold);
+        assert_eq!(imported.runs[0].style.font_size_points, 28.0);
+        assert_eq!(
+            imported.runs[0].style.font_family_name,
+            Some("docx-carlito")
+        );
+        assert_eq!(imported.runs[2].text, "Body");
+        assert!(imported.runs[2].style.italic);
+        assert_eq!(imported.runs[2].style.font_size_points, 11.0);
+        assert_eq!(
+            imported.runs[2].style.font_family_name,
+            Some("docx-liberation-mono")
+        );
+    }
+
+    #[test]
+    fn resolves_theme_fonts_and_direct_run_font_override() {
+        let numbering = parse_numbering_xml(
+            r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#,
+        )
+        .unwrap();
+        let theme_fonts = parse_theme_xml(
+            r#"
+            <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:themeElements>
+                <a:fontScheme>
+                  <a:majorFont><a:latin typeface="Cambria"/></a:majorFont>
+                  <a:minorFont><a:latin typeface="Aptos"/></a:minorFont>
+                </a:fontScheme>
+              </a:themeElements>
+            </a:theme>
+            "#,
+        )
+        .unwrap();
+        let styles = parse_styles_xml(
+            r#"
+            <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:style w:type="paragraph" w:styleId="Body">
+                <w:rPr>
+                  <w:rFonts w:asciiTheme="minorHAnsi"/>
+                </w:rPr>
+              </w:style>
+            </w:styles>
+            "#,
+            &theme_fonts,
+        )
+        .unwrap();
+
+        let imported = parse_document_xml(
+            r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:p>
+                  <w:pPr><w:pStyle w:val="Body"/></w:pPr>
+                  <w:r><w:t>Body</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:pPr><w:pStyle w:val="Body"/></w:pPr>
+                  <w:r>
+                    <w:rPr><w:rFonts w:ascii="Cambria"/></w:rPr>
+                    <w:t>Override</w:t>
+                  </w:r>
+                </w:p>
+              </w:body>
+            </w:document>
+            "#,
+            &numbering,
+            &styles,
+            &theme_fonts,
+            &Default::default(),
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            imported.runs[0].style.font_family_name,
+            Some("docx-carlito")
+        );
+        assert_eq!(
+            imported.runs[2].style.font_family_name,
+            Some("docx-caladea")
+        );
+    }
+
+    #[test]
+    fn parses_exact_and_at_least_line_spacing() {
+        let numbering = parse_numbering_xml(
+            r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#,
+        )
+        .unwrap();
+
+        let imported = parse_document_xml(
+            r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:p>
+                  <w:pPr><w:spacing w:line="480" w:lineRule="exact"/></w:pPr>
+                  <w:r><w:t>Exact</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:pPr><w:spacing w:line="360" w:lineRule="atLeast"/></w:pPr>
+                  <w:r><w:t>AtLeast</w:t></w:r>
+                </w:p>
+              </w:body>
+            </w:document>
+            "#,
+            &numbering,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            imported.paragraph_styles[0].line_spacing.kind,
+            LineSpacingKind::ExactPoints
+        );
+        assert_eq!(imported.paragraph_styles[0].line_spacing.value, 24.0);
+        assert_eq!(
+            imported.paragraph_styles[1].line_spacing.kind,
+            LineSpacingKind::AtLeastPoints
+        );
+        assert_eq!(imported.paragraph_styles[1].line_spacing.value, 18.0);
     }
 }

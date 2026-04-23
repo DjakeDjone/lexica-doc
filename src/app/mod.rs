@@ -19,6 +19,11 @@ use palette::{configure_theme, theme_palette};
 pub use palette::ThemeMode;
 
 const HISTORY_LIMIT: usize = 200;
+const DOCX_CARLITO: &str = "docx-carlito";
+const DOCX_CALADEA: &str = "docx-caladea";
+const DOCX_LIBERATION_SANS: &str = "docx-liberation-sans";
+const DOCX_LIBERATION_SERIF: &str = "docx-liberation-serif";
+const DOCX_LIBERATION_MONO: &str = "docx-liberation-mono";
 
 pub struct ChangeHistory {
     undo_stack: Vec<DocumentState>,
@@ -126,8 +131,16 @@ pub struct ImageMoveDrag {
     pub start_y_points: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoomMode {
+    Manual,
+    FitPage,
+}
+
 pub struct CanvasState {
     pub zoom: f32,
+    pub zoom_mode: ZoomMode,
+    pub imported_docx_view: bool,
     pub pan: egui::Vec2,
     pub selection: egui::text_selection::CCursorRange,
     pub active_style: CharacterStyle,
@@ -144,6 +157,8 @@ impl Default for CanvasState {
     fn default() -> Self {
         Self {
             zoom: 1.0,
+            zoom_mode: ZoomMode::Manual,
+            imported_docx_view: false,
             pan: egui::Vec2::ZERO,
             selection: egui::text_selection::CCursorRange::default(),
             active_style: CharacterStyle::default(),
@@ -175,6 +190,7 @@ impl WorsApp {
     pub fn new(cc: &CreationContext<'_>) -> Self {
         cc.egui_ctx
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
+        configure_docx_fonts(&cc.egui_ctx);
 
         let theme_mode = ThemeMode::Light;
         configure_theme(&cc.egui_ctx, theme_mode, theme_palette(theme_mode));
@@ -199,6 +215,45 @@ impl WorsApp {
             logo_texture,
         }
     }
+}
+
+fn configure_docx_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    register_font(
+        &mut fonts,
+        DOCX_CARLITO,
+        include_bytes!("../../assets/fonts/Carlito-Regular.ttf"),
+    );
+    register_font(
+        &mut fonts,
+        DOCX_CALADEA,
+        include_bytes!("../../assets/fonts/Caladea-Regular.ttf"),
+    );
+    register_font(
+        &mut fonts,
+        DOCX_LIBERATION_SANS,
+        include_bytes!("../../assets/fonts/LiberationSans-Regular.ttf"),
+    );
+    register_font(
+        &mut fonts,
+        DOCX_LIBERATION_SERIF,
+        include_bytes!("../../assets/fonts/LiberationSerif-Regular.ttf"),
+    );
+    register_font(
+        &mut fonts,
+        DOCX_LIBERATION_MONO,
+        include_bytes!("../../assets/fonts/LiberationMono-Regular.ttf"),
+    );
+    ctx.set_fonts(fonts);
+}
+
+fn register_font(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'static [u8]) {
+    fonts
+        .font_data
+        .insert(name.to_owned(), egui::FontData::from_static(bytes).into());
+    fonts
+        .families
+        .insert(egui::FontFamily::Name(name.into()), vec![name.to_owned()]);
 }
 
 impl App for WorsApp {

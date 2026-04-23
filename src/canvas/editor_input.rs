@@ -5,7 +5,7 @@ use eframe::egui::{
 };
 
 use crate::{
-    app::{CanvasState, ChangeHistory},
+    app::{CanvasState, ChangeHistory, ZoomMode},
     document::DocumentState,
 };
 
@@ -24,6 +24,7 @@ pub(super) fn apply_viewport_input(
     if ui.input(|input| input.modifiers.command) {
         let zoom_delta = ui.input(|input| input.zoom_delta());
         if zoom_delta != 1.0 {
+            canvas.zoom_mode = ZoomMode::Manual;
             canvas.zoom = (canvas.zoom * zoom_delta).clamp(0.5, 3.0);
         }
     } else if scroll_delta != egui::Vec2::ZERO {

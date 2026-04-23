@@ -19,7 +19,7 @@ use text::{char_to_byte_index, line_char_range, slice_char_range, word_char_rang
 
 pub const OBJECT_REPLACEMENT_CHAR: char = '\u{fffc}';
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum FontChoice {
     Proportional,
     Monospace,
@@ -99,6 +99,7 @@ pub struct CharacterStyle {
     pub strikethrough: bool,
     pub font_size_points: f32,
     pub font_choice: FontChoice,
+    pub font_family_name: Option<&'static str>,
     #[serde(serialize_with = "serialize_color32")]
     pub text_color: Color32,
     #[serde(serialize_with = "serialize_color32")]
@@ -114,17 +115,43 @@ impl Default for CharacterStyle {
             strikethrough: false,
             font_size_points: 12.0,
             font_choice: FontChoice::Proportional,
+            font_family_name: None,
             text_color: Color32::from_rgb(36, 39, 46),
             highlight_color: Color32::TRANSPARENT,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub enum LineSpacingKind {
+    AutoMultiplier,
+    AtLeastPoints,
+    ExactPoints,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LineSpacing {
+    pub kind: LineSpacingKind,
+    pub value: f32,
+}
+
+impl Default for LineSpacing {
+    fn default() -> Self {
+        Self {
+            kind: LineSpacingKind::AutoMultiplier,
+            value: 1.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ParagraphStyle {
     pub alignment: ParagraphAlignment,
     pub list_kind: ListKind,
     pub page_break_before: bool,
+    pub spacing_before_points: u16,
+    pub spacing_after_points: u16,
+    pub line_spacing: LineSpacing,
 }
 
 impl Default for ParagraphStyle {
@@ -133,6 +160,9 @@ impl Default for ParagraphStyle {
             alignment: ParagraphAlignment::Left,
             list_kind: ListKind::None,
             page_break_before: false,
+            spacing_before_points: 0,
+            spacing_after_points: 0,
+            line_spacing: LineSpacing::default(),
         }
     }
 }
@@ -1227,8 +1257,13 @@ pub(crate) fn text_format(style: CharacterStyle, zoom: f32) -> TextFormat {
         style.font_size_points * zoom
     };
 
+    let family = match style.font_family_name {
+        Some(name) => FontFamily::Name(name.into()),
+        None => style.font_choice.family(),
+    };
+
     TextFormat {
-        font_id: FontId::new(font_size, style.font_choice.family()),
+        font_id: FontId::new(font_size, family),
         color: if style.bold {
             style.text_color.gamma_multiply(0.88)
         } else {

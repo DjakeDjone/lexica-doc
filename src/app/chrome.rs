@@ -16,7 +16,7 @@ use super::{
         toggle_strikethrough, toggle_underline,
     },
     palette::{theme_switch, ThemeMode, ThemePalette},
-    CanvasState, ChangeHistory,
+    CanvasState, ChangeHistory, ZoomMode,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -535,10 +535,16 @@ fn ribbon_view_group(
                 )
                 .changed()
             {
+                canvas.zoom_mode = ZoomMode::Manual;
                 canvas.zoom = (zoom_percent / 100.0).clamp(0.5, 3.0);
             }
         });
         if ui.button("↺").clicked() {
+            canvas.zoom_mode = if canvas.imported_docx_view {
+                ZoomMode::FitPage
+            } else {
+                ZoomMode::Manual
+            };
             canvas.zoom = 1.0;
             canvas.pan = egui::Vec2::ZERO;
             *status_message = "View reset".to_owned();

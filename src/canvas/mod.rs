@@ -13,16 +13,14 @@ use eframe::egui::{
 };
 
 use crate::{
-    app::{
-        CanvasState, ChangeHistory, ImageMoveDrag, ImageResizeDrag, ResizeHandle, ThemeMode,
-    },
+    app::{CanvasState, ChangeHistory, ImageMoveDrag, ImageResizeDrag, ResizeHandle, ThemeMode},
     document::{
-        text_format, CharacterStyle, DocumentImage, DocumentState, ImageRendering,
+        text_format, CharacterStyle, DocumentImage, DocumentState, ImageRendering, LineSpacingKind,
         ParagraphAlignment, WrapMode, OBJECT_REPLACEMENT_CHAR,
     },
     layout::{
         centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
-        page_content_rect,
+        fit_page_zoom, page_content_rect,
     },
 };
 
@@ -81,6 +79,9 @@ pub fn paint_document_canvas(
     let painter = ui.painter_at(viewport);
     let pixels_per_point = ui.ctx().pixels_per_point();
     apply_viewport_input(ui, &response, canvas);
+    if canvas.zoom_mode == crate::app::ZoomMode::FitPage {
+        canvas.zoom = fit_page_zoom(viewport, document.page_size);
+    }
 
     painter.rect_filled(viewport, CornerRadius::ZERO, palette.canvas_bg);
 
@@ -162,9 +163,7 @@ pub fn paint_document_canvas(
                         + row.pos.x
                         + image.offset.x
                         + document_points_to_screen_points(image.image.offset_x_points(), zoom),
-                    page.content_rect.top()
-                        + image_y
-                        - page.start_y
+                    page.content_rect.top() + image_y - page.start_y
                         + image.offset.y
                         + document_points_to_screen_points(image.image.offset_y_points(), zoom),
                 ),
@@ -182,7 +181,15 @@ pub fn paint_document_canvas(
             let Some(image_rect) = image_screen_rect(image) else {
                 continue;
             };
-            paint_image_on_page(ui, canvas, &page_clipped_painter, image, image_rect, &palette, 1.0);
+            paint_image_on_page(
+                ui,
+                canvas,
+                &page_clipped_painter,
+                image,
+                image_rect,
+                &palette,
+                1.0,
+            );
             new_image_rects.push((image.image.id, image_rect));
         }
 
@@ -229,7 +236,15 @@ pub fn paint_document_canvas(
             let Some(image_rect) = image_screen_rect(image) else {
                 continue;
             };
-            paint_image_on_page(ui, canvas, &page_clipped_painter, image, image_rect, &palette, 1.0);
+            paint_image_on_page(
+                ui,
+                canvas,
+                &page_clipped_painter,
+                image,
+                image_rect,
+                &palette,
+                1.0,
+            );
             new_image_rects.push((image.image.id, image_rect));
         }
 
@@ -245,7 +260,15 @@ pub fn paint_document_canvas(
             let Some(image_rect) = image_screen_rect(image) else {
                 continue;
             };
-            paint_image_on_page(ui, canvas, &page_clipped_painter, image, image_rect, &palette, 1.0);
+            paint_image_on_page(
+                ui,
+                canvas,
+                &page_clipped_painter,
+                image,
+                image_rect,
+                &palette,
+                1.0,
+            );
             new_image_rects.push((image.image.id, image_rect));
         }
     }
@@ -274,7 +297,15 @@ pub fn paint_document_canvas(
                 .iter()
                 .find(|i| i.image.id == move_drag.image_id)
             {
-                paint_image_on_page(ui, canvas, &painter, image_layout, ghost_rect, &palette, 0.5);
+                paint_image_on_page(
+                    ui,
+                    canvas,
+                    &painter,
+                    image_layout,
+                    ghost_rect,
+                    &palette,
+                    0.5,
+                );
             }
         }
     }
@@ -356,7 +387,9 @@ fn paint_image_on_page(
     alpha_multiplier: f32,
 ) {
     if let Some(texture) = texture_for_image(ui.ctx(), canvas, &image.image) {
-        let alpha = (image.image.opacity * alpha_multiplier * 255.0).round().clamp(0.0, 255.0) as u8;
+        let alpha = (image.image.opacity * alpha_multiplier * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8;
         let tint = Color32::from_white_alpha(alpha);
         painter.image(
             texture.id(),
@@ -612,7 +645,6 @@ fn handle_image_interaction(
             canvas.move_drag = None;
             return true;
         }
-
     }
 
     // Click on image body → select it; click elsewhere → deselect
@@ -685,6 +717,7 @@ fn layout_document(
     let mut list_markers = Vec::new();
     let mut images = Vec::new();
     let mut manual_page_break_rows = Vec::new();
+    let mut paragraph_spacing_ranges = Vec::new();
     let mut row_index = 0usize;
     let mut tight_wrap_flow: Option<ActiveTightWrapFlow> = None;
 
@@ -753,12 +786,8 @@ fn layout_document(
             let image_offset_x_points = image.offset_x_points();
             let image_offset_y_points = image.offset_y_points();
             let display_size = image_display_size(&image, paragraph_wrap_width, canvas.zoom);
-            let reservation = block_image_reservation(
-                wrap_mode,
-                display_size,
-                paragraph_wrap_width,
-                canvas.zoom,
-            );
+            let reservation =
+                block_image_reservation(wrap_mode, display_size, paragraph_wrap_width, canvas.zoom);
             if reserve_block_image_space(&mut paragraph_galley, reservation.row_size) {
                 images.push(ImageLayout {
                     row_index,
@@ -784,6 +813,11 @@ fn layout_document(
             indent,
             paragraph_wrap_width,
             paragraph.style.alignment,
+        );
+        apply_line_spacing(
+            &mut paragraph_galley,
+            paragraph.style.line_spacing,
+            canvas.zoom,
         );
 
         if let Some((image_width, image_height, image_offset_x, image_offset_y)) =
@@ -846,7 +880,25 @@ fn layout_document(
             }
         }
 
-        row_index += paragraph_galley.rows.len();
+        let paragraph_row_count = paragraph_galley.rows.len();
+        let paragraph_spacing_top = document_points_to_screen_points(
+            f32::from(paragraph.style.spacing_before_points),
+            canvas.zoom,
+        );
+        let paragraph_spacing_bottom = document_points_to_screen_points(
+            f32::from(paragraph.style.spacing_after_points),
+            canvas.zoom,
+        );
+        if paragraph_row_count > 0 {
+            paragraph_spacing_ranges.push(ParagraphSpacingRange {
+                row_start: row_index,
+                row_end: row_index + paragraph_row_count,
+                top: paragraph_spacing_top,
+                bottom: paragraph_spacing_bottom,
+            });
+        }
+
+        row_index += paragraph_row_count;
         paragraph_galleys.push(paragraph_galley);
     }
 
@@ -861,6 +913,7 @@ fn layout_document(
         &paragraph_galleys,
         painter.pixels_per_point(),
     ));
+    apply_paragraph_row_spacing(&mut galley, &paragraph_spacing_ranges);
     apply_tight_wrap_row_offsets(&mut galley, &images, canvas.zoom);
 
     DocumentLayout {
@@ -902,6 +955,46 @@ fn append_run_with_placeholders(
     if !segment.is_empty() {
         job.append(&segment, 0.0, text_format(run.style, zoom));
     }
+}
+
+fn apply_line_spacing(
+    galley: &mut Arc<egui::Galley>,
+    line_spacing: crate::document::LineSpacing,
+    zoom: f32,
+) {
+    if galley.rows.len() < 2 {
+        return;
+    }
+
+    let galley = Arc::make_mut(galley);
+    let original_rect = galley.rect;
+    let mut mesh_bounds = egui::Rect::NOTHING;
+    let mut cumulative_shift = 0.0;
+
+    for row_index in 1..galley.rows.len() {
+        let previous_row_height = galley.rows[row_index - 1].row.height();
+        let desired_advance = match line_spacing.kind {
+            LineSpacingKind::AutoMultiplier => previous_row_height * line_spacing.value.max(0.0),
+            LineSpacingKind::AtLeastPoints => previous_row_height.max(
+                document_points_to_screen_points(line_spacing.value.max(0.0), zoom),
+            ),
+            LineSpacingKind::ExactPoints => {
+                document_points_to_screen_points(line_spacing.value.max(0.0), zoom)
+            }
+        };
+        cumulative_shift += desired_advance - previous_row_height;
+        galley.rows[row_index].pos.y += cumulative_shift;
+    }
+
+    for row in &galley.rows {
+        mesh_bounds |= row.visuals.mesh_bounds.translate(row.pos.to_vec2());
+    }
+
+    galley.rect = egui::Rect::from_min_max(
+        original_rect.min,
+        egui::pos2(original_rect.max.x, original_rect.max.y + cumulative_shift),
+    );
+    galley.mesh_bounds = mesh_bounds;
 }
 
 struct BlockImageReservation {
@@ -960,11 +1053,7 @@ fn tight_wrap_row_height(zoom: f32) -> f32 {
     document_points_to_screen_points(14.0, zoom).max(1.0)
 }
 
-fn apply_tight_wrap_row_offsets(
-    galley: &mut Arc<egui::Galley>,
-    images: &[ImageLayout],
-    zoom: f32,
-) {
+fn apply_tight_wrap_row_offsets(galley: &mut Arc<egui::Galley>, images: &[ImageLayout], zoom: f32) {
     let zones = tight_wrap_zones(galley, images, zoom);
     if zones.is_empty() {
         return;
@@ -999,12 +1088,19 @@ fn apply_tight_wrap_row_offsets(
     galley.mesh_bounds = mesh_bounds;
 }
 
-fn tight_wrap_zones(galley: &egui::Galley, images: &[ImageLayout], zoom: f32) -> Vec<TightWrapZone> {
+fn tight_wrap_zones(
+    galley: &egui::Galley,
+    images: &[ImageLayout],
+    zoom: f32,
+) -> Vec<TightWrapZone> {
     let tight_pad = tight_wrap_pad(zoom);
     let min_side_width = document_points_to_screen_points(72.0, zoom);
     let mut zones = Vec::new();
 
-    for image in images.iter().filter(|image| image.image.wrap_mode == WrapMode::Tight) {
+    for image in images
+        .iter()
+        .filter(|image| image.image.wrap_mode == WrapMode::Tight)
+    {
         let Some(row) = galley.rows.get(image.row_index) else {
             continue;
         };
@@ -1161,12 +1257,13 @@ fn align_paragraph_galley(
 mod tests {
     use super::*;
     use crate::{
-        app::CanvasState,
+        app::{CanvasState, ZoomMode},
         document::{
             CharacterStyle, DocumentImage, DocumentState, ImageLayoutMode, ImageRendering,
-            ListKind, PageMargins, PageSize, ParagraphAlignment, ParagraphStyle, TextRun, WrapMode,
-            OBJECT_REPLACEMENT_CHAR,
+            LineSpacing, LineSpacingKind, ListKind, PageMargins, PageSize, ParagraphAlignment,
+            ParagraphStyle, TextRun, WrapMode, OBJECT_REPLACEMENT_CHAR,
         },
+        layout::fit_page_zoom,
     };
 
     /// Run `layout_document` inside a headless egui context and return
@@ -1379,6 +1476,114 @@ mod tests {
     }
 
     #[test]
+    fn paragraph_spacing_offsets_following_rows() {
+        let document = make_document(
+            vec![TextRun {
+                text: "First\nSecond".to_owned(),
+                style: CharacterStyle::default(),
+            }],
+            vec![
+                ParagraphStyle {
+                    spacing_after_points: 24,
+                    ..ParagraphStyle::default()
+                },
+                ParagraphStyle::default(),
+            ],
+            vec![None, None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 600.0);
+
+        assert!(layout.galley.rows.len() >= 2);
+        let first_row = &layout.galley.rows[0];
+        let second_row = &layout.galley.rows[1];
+        assert!(
+            second_row.pos.y - first_row.pos.y > first_row.rect().height(),
+            "paragraph spacing should increase the gap between rows"
+        );
+    }
+
+    #[test]
+    fn auto_multiplier_line_spacing_offsets_following_line() {
+        let document = make_document(
+            vec![TextRun {
+                text: "First line in paragraph that wraps on purpose because the width is narrow"
+                    .to_owned(),
+                style: CharacterStyle::default(),
+            }],
+            vec![ParagraphStyle {
+                line_spacing: LineSpacing {
+                    kind: LineSpacingKind::AutoMultiplier,
+                    value: 1.5,
+                },
+                ..ParagraphStyle::default()
+            }],
+            vec![None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 240.0);
+
+        assert!(layout.galley.rows.len() >= 2);
+        let first_row = &layout.galley.rows[0];
+        let second_row = &layout.galley.rows[1];
+        let default_gap = first_row.row.height();
+        let actual_gap = second_row.pos.y - first_row.pos.y;
+        assert!(
+            actual_gap > default_gap * 1.45,
+            "1.5x line spacing should enlarge row advance, got actual_gap={actual_gap}, default_gap={default_gap}"
+        );
+    }
+
+    #[test]
+    fn exact_line_spacing_uses_requested_row_advance() {
+        let document = make_document(
+            vec![TextRun {
+                text: "First line in paragraph that wraps on purpose because the width is narrow"
+                    .to_owned(),
+                style: CharacterStyle::default(),
+            }],
+            vec![ParagraphStyle {
+                line_spacing: LineSpacing {
+                    kind: LineSpacingKind::ExactPoints,
+                    value: 24.0,
+                },
+                ..ParagraphStyle::default()
+            }],
+            vec![None],
+        );
+        let canvas = CanvasState::default();
+        let layout = run_headless_layout(&document, &canvas, 240.0);
+
+        assert!(layout.galley.rows.len() >= 2);
+        let first_row = &layout.galley.rows[0];
+        let second_row = &layout.galley.rows[1];
+        let actual_gap = second_row.pos.y - first_row.pos.y;
+        assert!(
+            (actual_gap - 24.0).abs() < 1.5,
+            "exact line spacing should follow the requested advance, got {actual_gap}"
+        );
+    }
+
+    #[test]
+    fn fit_page_zoom_uses_manual_override_rules() {
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 500.0));
+        let fit = fit_page_zoom(viewport, PageSize::a4());
+        assert!(
+            fit < 1.0,
+            "fit zoom should shrink an A4 page in a small viewport"
+        );
+
+        let mut canvas = CanvasState::default();
+        canvas.imported_docx_view = true;
+        canvas.zoom_mode = ZoomMode::FitPage;
+        canvas.zoom = fit;
+        canvas.zoom_mode = ZoomMode::Manual;
+        canvas.zoom = (canvas.zoom * 1.1).clamp(0.5, 3.0);
+        assert_eq!(canvas.zoom_mode, ZoomMode::Manual);
+        assert!(canvas.zoom > fit);
+    }
+
+    #[test]
     fn image_with_page_break_in_multi_paragraph_document() {
         let document = make_document(
             vec![TextRun {
@@ -1563,4 +1768,46 @@ mod tests {
             "moving image down should reduce early side-wrapping; got normal_row_x={normal_row_x}, moved_down_row_x={moved_down_row_x}"
         );
     }
+}
+
+struct ParagraphSpacingRange {
+    row_start: usize,
+    row_end: usize,
+    top: f32,
+    bottom: f32,
+}
+
+fn apply_paragraph_row_spacing(
+    galley: &mut Arc<egui::Galley>,
+    paragraph_spacing_ranges: &[ParagraphSpacingRange],
+) {
+    if paragraph_spacing_ranges.is_empty() {
+        return;
+    }
+
+    let galley = Arc::make_mut(galley);
+    let original_rect = galley.rect;
+    let mut mesh_bounds = egui::Rect::NOTHING;
+    let mut cumulative_shift = 0.0;
+    let row_count = galley.rows.len();
+
+    for range in paragraph_spacing_ranges {
+        let paragraph_shift = cumulative_shift + range.top;
+        let start = range.row_start.min(row_count);
+        let end = range.row_end.min(row_count);
+        for row in galley.rows[start..end].iter_mut() {
+            row.pos.y += paragraph_shift;
+        }
+        cumulative_shift += range.top + range.bottom;
+    }
+
+    for row in &galley.rows {
+        mesh_bounds |= row.visuals.mesh_bounds.translate(row.pos.to_vec2());
+    }
+
+    galley.rect = egui::Rect::from_min_max(
+        original_rect.min,
+        egui::pos2(original_rect.max.x, original_rect.max.y + cumulative_shift),
+    );
+    galley.mesh_bounds = mesh_bounds;
 }

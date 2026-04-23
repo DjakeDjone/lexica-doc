@@ -8,7 +8,7 @@ use crate::document::{
     ParagraphStyle,
 };
 
-use super::{CanvasState, ChangeHistory};
+use super::{CanvasState, ChangeHistory, ZoomMode};
 
 pub(super) fn open_document(
     document: &mut DocumentState,
@@ -23,12 +23,20 @@ pub(super) fn open_document(
     {
         match DocumentState::load_from_path(&path) {
             Ok(new_document) => {
+                let imported_docx =
+                    matches!(path.extension().and_then(|ext| ext.to_str()), Some("docx"));
                 history.clear();
                 *document = new_document;
                 canvas.selection = egui::text_selection::CCursorRange::default();
                 canvas.active_style = CharacterStyle::default();
                 canvas.active_paragraph_style = ParagraphStyle::default();
                 canvas.zoom = 1.0;
+                canvas.zoom_mode = if imported_docx {
+                    ZoomMode::FitPage
+                } else {
+                    ZoomMode::Manual
+                };
+                canvas.imported_docx_view = imported_docx;
                 canvas.pan = egui::Vec2::ZERO;
                 canvas.image_textures.clear();
                 canvas.selected_image_id = None;
