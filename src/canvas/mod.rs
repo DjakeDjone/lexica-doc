@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use eframe::egui::{
     self,
+    epaint::text::cursor::CCursor,
     epaint::CornerRadius,
     text_selection::visuals::{paint_text_cursor, paint_text_selection},
     Align2, Color32, FontFamily, FontId, Id, Rect, Sense, Stroke, StrokeKind,
@@ -18,10 +19,12 @@ use crate::{
         text_format, CharacterStyle, DocumentImage, DocumentState, ImageRendering, LineSpacingKind,
         ParagraphAlignment, WrapMode, OBJECT_REPLACEMENT_CHAR,
     },
+    grammar::GrammarError,
     layout::{
         centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
         fit_page_zoom, page_content_rect,
     },
+    ui::squiggles::{paint_grammar_squiggles, ReplacementAction, SquigglePageSlice},
 };
 
 use editor_input::{apply_viewport_input, handle_keyboard_input, handle_pointer_interaction};
@@ -65,13 +68,20 @@ struct ImageLayout {
     image: DocumentImage,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CanvasOutput {
+    pub text_changed: bool,
+}
+
 pub fn paint_document_canvas(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
     canvas: &mut CanvasState,
     theme_mode: ThemeMode,
     history: &mut ChangeHistory,
-) {
+    grammar_errors: &[GrammarError],
+) -> CanvasOutput {
+    let mut output = CanvasOutput::default();
     let palette = canvas_palette(theme_mode);
     let viewport = ui.available_rect_before_wrap();
     let editor_id = Id::new("document_canvas");
@@ -99,6 +109,7 @@ pub fn paint_document_canvas(
 
     let has_focus = ui.memory(|mem| mem.has_focus(editor_id));
     if has_focus && handle_keyboard_input(ui, document, canvas, &document_layout.galley, history) {
+        output.text_changed = true;
         document_layout = layout_document(ui, document, canvas, content_size.x);
     }
 
@@ -273,6 +284,23 @@ pub fn paint_document_canvas(
         }
     }
 
+    let squiggle_pages: Vec<SquigglePageSlice> = page_layout
+        .pages
+        .iter()
+        .map(|page| SquigglePageSlice {
+            content_rect: page.content_rect,
+            start_y: page.start_y,
+            end_y: page.end_y,
+        })
+        .collect();
+    let pending_replacement = paint_grammar_squiggles(
+        ui,
+        &painter,
+        &document_layout.galley,
+        &squiggle_pages,
+        grammar_errors,
+    );
+
     canvas.image_rects = new_image_rects;
     let image_pointer_captured = handle_image_interaction(ui, &response, canvas, document);
 
@@ -375,6 +403,59 @@ pub fn paint_document_canvas(
         footer_galley,
         palette.footer_text,
     );
+
+    if let Some(replacement) = pending_replacement {
+        if apply_grammar_replacement(document, canvas, history, ui, replacement) {
+            output.text_changed = true;
+        }
+    }
+
+    output
+}
+
+fn apply_grammar_replacement(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+    ui: &egui::Ui,
+    replacement: ReplacementAction,
+) -> bool {
+    let text = document.plain_text();
+    if replacement.byte_start >= text.len() || replacement.byte_start > replacement.byte_end {
+        return false;
+    }
+
+    let start_char = byte_to_char_index(&text, replacement.byte_start);
+    let end_char = byte_to_char_index(&text, replacement.byte_end).max(start_char);
+    let style = document.style_at(start_char);
+
+    let now = ui.input(|i| i.time);
+    history.checkpoint(document, now);
+    document.delete_range(start_char..end_char);
+    document.insert_text(start_char, &replacement.replacement, style);
+
+    let cursor_char = start_char + replacement.replacement.chars().count();
+    canvas.selection = egui::text_selection::CCursorRange::one(CCursor::new(cursor_char));
+    canvas.active_style = document.typing_style_at(cursor_char);
+    canvas.active_paragraph_style = document.paragraph_style_at(cursor_char);
+    canvas.last_interaction_time = now;
+    true
+}
+
+fn byte_to_char_index(text: &str, byte_offset: usize) -> usize {
+    let clamped = byte_offset.min(text.len());
+    let mut count = 0usize;
+    for (idx, _) in text.char_indices() {
+        if idx >= clamped {
+            break;
+        }
+        count += 1;
+    }
+    if clamped == text.len() {
+        text.chars().count()
+    } else {
+        count
+    }
 }
 
 fn paint_image_on_page(

@@ -6,6 +6,7 @@ use crate::document::{
     DocumentState, FontChoice, ImageLayoutMode, ImageRendering, ListKind, ParagraphAlignment,
     WrapMode, OBJECT_REPLACEMENT_CHAR,
 };
+use crate::grammar::{GrammarConfig, GrammarStatus, Language};
 
 use super::{
     actions::{
@@ -26,16 +27,18 @@ pub(super) enum RibbonTab {
     Design,
     Layout,
     View,
+    Grammer,
     Picture,
 }
 
 impl RibbonTab {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Home,
         Self::Insert,
         Self::Design,
         Self::Layout,
         Self::View,
+        Self::Grammer,
     ];
 
     const fn label(self) -> &'static str {
@@ -45,9 +48,18 @@ impl RibbonTab {
             Self::Design => "Design",
             Self::Layout => "Layout",
             Self::View => "View",
+            Self::Grammer => "Grammer",
             Self::Picture => "Picture Format",
         }
     }
+}
+
+#[derive(Default)]
+pub(super) struct GrammarRibbonOutput {
+    pub manual_check_requested: bool,
+    pub restart_requested: bool,
+    pub download_requested: bool,
+    pub settings_changed: bool,
 }
 
 pub(super) fn paint_title_bar(
@@ -243,9 +255,14 @@ pub(super) fn paint_ribbon(
     current_path: &mut Option<PathBuf>,
     theme_mode: &mut ThemeMode,
     history: &mut ChangeHistory,
+    grammar_config: &mut GrammarConfig,
+    grammar_status: &GrammarStatus,
+    grammar_auto_check: &mut bool,
+    can_download_grammar: bool,
     palette: ThemePalette,
-) {
+) -> GrammarRibbonOutput {
     sync_active_style(document, canvas);
+    let mut output = GrammarRibbonOutput::default();
 
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(8, 8))
@@ -296,11 +313,38 @@ pub(super) fn paint_ribbon(
                         palette,
                     );
                 }
+                RibbonTab::Grammer => {
+                    ribbon_grammer_actions_group(
+                        ui,
+                        grammar_status,
+                        can_download_grammar,
+                        &mut output,
+                        palette,
+                    );
+                    ribbon_grammer_settings_group(
+                        ui,
+                        grammar_config,
+                        grammar_auto_check,
+                        &mut output,
+                        palette,
+                    );
+                    ribbon_info_group(
+                        ui,
+                        "Server",
+                        &format!(
+                            "JAR: {} | Port: {}",
+                            grammar_config.lt_jar_path.display(),
+                            grammar_config.port
+                        ),
+                        palette,
+                    );
+                }
                 RibbonTab::Picture => {
                     ribbon_picture_group(ui, document, canvas, status_message, history, palette);
                 }
             });
         });
+    output
 }
 
 pub(super) fn paint_status_bar(
@@ -308,6 +352,8 @@ pub(super) fn paint_status_bar(
     document: &DocumentState,
     canvas: &CanvasState,
     status_message: &str,
+    grammar_status: &GrammarStatus,
+    grammar_issue_count: usize,
     palette: ThemePalette,
 ) {
     ui.horizontal(|ui| {
@@ -334,6 +380,52 @@ pub(super) fn paint_status_bar(
                 .size(11.0)
                 .color(palette.text_primary),
         );
+        ui.separator();
+        match grammar_status {
+            GrammarStatus::Idle => {
+                ui.label(
+                    egui::RichText::new("Grammar idle")
+                        .size(11.0)
+                        .color(palette.text_muted),
+                );
+            }
+            GrammarStatus::Checking => {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new("Checking grammar…")
+                        .size(11.0)
+                        .color(palette.text_muted),
+                );
+                ui.ctx().request_repaint();
+            }
+            GrammarStatus::Done => {
+                let text = if grammar_issue_count == 0 {
+                    "No issues".to_owned()
+                } else if grammar_issue_count == 1 {
+                    "1 issue".to_owned()
+                } else {
+                    format!("{grammar_issue_count} issues")
+                };
+                ui.label(
+                    egui::RichText::new(text)
+                        .size(11.0)
+                        .color(palette.text_muted),
+                );
+            }
+            GrammarStatus::Unavailable(message) => {
+                let short_message: String = message.chars().take(42).collect();
+                ui.label(
+                    egui::RichText::new("⚠")
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(194, 87, 0)),
+                );
+                ui.label(
+                    egui::RichText::new(short_message)
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(194, 87, 0)),
+                );
+            }
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(format!("{:.0}%", canvas.zoom * 100.0))
@@ -556,6 +648,93 @@ fn ribbon_view_group(
         if theme_switch(ui, theme_mode, palette, false) {
             *status_message = format!("Theme switched to {}", theme_mode.label());
         }
+    });
+}
+
+fn ribbon_grammer_actions_group(
+    ui: &mut egui::Ui,
+    grammar_status: &GrammarStatus,
+    can_download_grammar: bool,
+    output: &mut GrammarRibbonOutput,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Check", palette, |ui| {
+        if ui.button("Check Now").clicked() {
+            output.manual_check_requested = true;
+        }
+        if ui.button("Restart").clicked() {
+            output.restart_requested = true;
+        }
+        if ui
+            .add_enabled(can_download_grammar, egui::Button::new("Download"))
+            .clicked()
+        {
+            output.download_requested = true;
+        }
+
+        ui.separator();
+        let status_text = match grammar_status {
+            GrammarStatus::Idle => "Idle".to_owned(),
+            GrammarStatus::Checking => "Checking".to_owned(),
+            GrammarStatus::Done => "Ready".to_owned(),
+            GrammarStatus::Unavailable(message) => {
+                let short: String = message.chars().take(32).collect();
+                format!("Unavailable: {short}")
+            }
+        };
+        ui.label(
+            egui::RichText::new(status_text)
+                .size(11.0)
+                .color(palette.text_muted),
+        );
+    });
+}
+
+fn ribbon_grammer_settings_group(
+    ui: &mut egui::Ui,
+    grammar_config: &mut GrammarConfig,
+    grammar_auto_check: &mut bool,
+    output: &mut GrammarRibbonOutput,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Settings", palette, |ui| {
+        if ui.checkbox(grammar_auto_check, "Auto Check").changed() {
+            output.settings_changed = true;
+        }
+
+        egui::ComboBox::from_id_salt("grammar_language")
+            .selected_text(match grammar_config.language {
+                Language::Auto => "Auto",
+                Language::EnUs => "English (US)",
+                Language::DeDE => "German (DE)",
+            })
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_value(&mut grammar_config.language, Language::Auto, "Auto")
+                    .changed()
+                {
+                    output.settings_changed = true;
+                }
+                if ui
+                    .selectable_value(&mut grammar_config.language, Language::EnUs, "English (US)")
+                    .changed()
+                {
+                    output.settings_changed = true;
+                }
+                if ui
+                    .selectable_value(&mut grammar_config.language, Language::DeDE, "German (DE)")
+                    .changed()
+                {
+                    output.settings_changed = true;
+                }
+            });
+
+        ui.label(
+            egui::RichText::new("Choose the LanguageTool input language.")
+                .size(11.0)
+                .color(palette.text_muted),
+        );
     });
 }
 

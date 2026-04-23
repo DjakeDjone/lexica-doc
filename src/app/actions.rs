@@ -195,7 +195,9 @@ pub(super) fn handle_global_shortcuts(
     history: &mut ChangeHistory,
     current_path: &mut Option<PathBuf>,
     status_message: &mut String,
-) {
+) -> bool {
+    let mut document_changed = false;
+
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
         save_document(document, status_message, current_path);
     }
@@ -212,10 +214,12 @@ pub(super) fn handle_global_shortcuts(
             if history.redo(document) {
                 canvas.image_textures.clear();
                 *status_message = "Redo".to_owned();
+                document_changed = true;
             }
         } else if history.undo(document) {
             canvas.image_textures.clear();
             *status_message = "Undo".to_owned();
+            document_changed = true;
         }
     }
     if ui.input_mut(|input| {
@@ -227,6 +231,7 @@ pub(super) fn handle_global_shortcuts(
         if history.redo(document) {
             canvas.image_textures.clear();
             *status_message = "Redo".to_owned();
+            document_changed = true;
         }
     }
     // Ctrl+Y as an alternative redo shortcut
@@ -234,8 +239,11 @@ pub(super) fn handle_global_shortcuts(
         if history.redo(document) {
             canvas.image_textures.clear();
             *status_message = "Redo".to_owned();
+            document_changed = true;
         }
     }
+
+    document_changed
 }
 
 pub(super) fn set_image_opacity(
