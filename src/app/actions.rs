@@ -222,25 +222,24 @@ pub(super) fn handle_global_shortcuts(
             document_changed = true;
         }
     }
-    if ui.input_mut(|input| {
+    let shift_redo_pressed = ui.input_mut(|input| {
         input.consume_key(
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
             egui::Key::Z,
         )
-    }) {
-        if history.redo(document) {
-            canvas.image_textures.clear();
-            *status_message = "Redo".to_owned();
-            document_changed = true;
-        }
+    });
+    if shift_redo_pressed && history.redo(document) {
+        canvas.image_textures.clear();
+        *status_message = "Redo".to_owned();
+        document_changed = true;
     }
     // Ctrl+Y as an alternative redo shortcut
-    if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)) {
-        if history.redo(document) {
-            canvas.image_textures.clear();
-            *status_message = "Redo".to_owned();
-            document_changed = true;
-        }
+    let redo_pressed =
+        ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y));
+    if redo_pressed && history.redo(document) {
+        canvas.image_textures.clear();
+        *status_message = "Redo".to_owned();
+        document_changed = true;
     }
 
     document_changed

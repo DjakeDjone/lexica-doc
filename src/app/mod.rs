@@ -142,6 +142,8 @@ pub struct ImageResizeDrag {
     pub start_ptr: egui::Pos2,
     pub start_width_points: f32,
     pub start_height_points: f32,
+    pub start_x_points: f32,
+    pub start_y_points: f32,
 }
 
 pub struct ImageMoveDrag {
@@ -192,6 +194,12 @@ impl Default for CanvasState {
             resize_drag: None,
             move_drag: None,
         }
+    }
+}
+
+impl Default for ChangeHistory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

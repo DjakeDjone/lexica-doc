@@ -62,6 +62,7 @@ pub(super) struct GrammarRibbonOutput {
     pub settings_changed: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint_title_bar(
     ui: &mut egui::Ui,
     document: &mut crate::document::DocumentState,
@@ -118,11 +119,10 @@ pub(super) fn paint_title_bar(
                     .add_enabled(can_undo, undo_btn)
                     .on_hover_text("Undo (Ctrl+Z)")
                     .clicked()
+                    && history.undo(document)
                 {
-                    if history.undo(document) {
-                        canvas.image_textures.clear();
-                        *status_target = "Undo".to_owned();
-                    }
+                    canvas.image_textures.clear();
+                    *status_target = "Undo".to_owned();
                 }
                 let redo_btn =
                     egui::Button::new(egui::RichText::new("↪").size(14.0).color(if can_redo {
@@ -137,11 +137,10 @@ pub(super) fn paint_title_bar(
                     .add_enabled(can_redo, redo_btn)
                     .on_hover_text("Redo (Ctrl+Shift+Z / Ctrl+Y)")
                     .clicked()
+                    && history.redo(document)
                 {
-                    if history.redo(document) {
-                        canvas.image_textures.clear();
-                        *status_target = "Redo".to_owned();
-                    }
+                    canvas.image_textures.clear();
+                    *status_target = "Redo".to_owned();
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -246,6 +245,7 @@ pub(super) fn paint_tab_row(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint_ribbon(
     ui: &mut egui::Ui,
     document: &mut DocumentState,

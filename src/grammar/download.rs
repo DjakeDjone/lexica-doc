@@ -95,9 +95,7 @@ fn extract_distribution_into_dir(zip_bytes: &[u8], target_dir: &Path) -> Result<
 }
 
 fn strip_archive_root(path: &str) -> Option<&str> {
-    let mut parts = path.splitn(2, '/');
-    let first = parts.next()?;
-    let rest = parts.next()?;
+    let (first, rest) = path.split_once('/')?;
     if first.is_empty() || rest.is_empty() {
         None
     } else {

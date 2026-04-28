@@ -333,14 +333,26 @@ pub struct DocumentImage {
 }
 
 impl DocumentImage {
-    /// Horizontal position offset in document points (convenience accessor).
     pub fn offset_x_points(&self) -> f32 {
         self.horizontal_position.offset_points
     }
 
-    /// Vertical position offset in document points (convenience accessor).
     pub fn offset_y_points(&self) -> f32 {
         self.vertical_position.offset_points
+    }
+
+    pub fn set_manual_offset(&mut self, x_points: f32, y_points: f32) {
+        self.horizontal_position.align = None;
+        self.vertical_position.align = None;
+        self.horizontal_position.offset_points = x_points;
+        self.vertical_position.offset_points = y_points;
+    }
+
+    pub fn adjust_manual_offset(&mut self, dx: f32, dy: f32) {
+        self.set_manual_offset(
+            self.horizontal_position.offset_points + dx,
+            self.vertical_position.offset_points + dy,
+        );
     }
 }
 
@@ -756,143 +768,133 @@ impl DocumentState {
     }
 
     pub fn resize_image_by_id(&mut self, id: usize, width_points: f32, height_points: f32) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.width_points = width_points.max(24.0);
-                    image.height_points = height_points.max(24.0);
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.width_points = width_points.max(24.0);
+            image.height_points = height_points.max(24.0);
         }
     }
 
     pub fn set_image_offset_by_id(&mut self, id: usize, x_points: f32, y_points: f32) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.horizontal_position.offset_points = x_points;
-                    image.vertical_position.offset_points = y_points;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.set_manual_offset(x_points, y_points);
+        }
+    }
+
+    pub fn adjust_image_offset_by_id(&mut self, id: usize, dx: f32, dy: f32) {
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.adjust_manual_offset(dx, dy);
         }
     }
 
     pub fn set_image_layout_mode(&mut self, id: usize, mode: ImageLayoutMode) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.layout_mode = mode;
-                    // When switching to inline, reset wrap mode
-                    if mode == ImageLayoutMode::Inline {
-                        image.wrap_mode = WrapMode::Inline;
-                    } else if image.wrap_mode == WrapMode::Inline {
-                        image.wrap_mode = WrapMode::Square;
-                    }
-                    return;
-                }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.layout_mode = mode;
+            if mode == ImageLayoutMode::Inline {
+                image.wrap_mode = WrapMode::Inline;
+                image.set_manual_offset(0.0, 0.0);
+            } else if image.wrap_mode == WrapMode::Inline {
+                image.wrap_mode = WrapMode::Square;
             }
         }
     }
 
     pub fn set_image_horizontal_position(&mut self, id: usize, pos: HorizontalPosition) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.horizontal_position = pos;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.horizontal_position = pos;
         }
     }
 
     pub fn set_image_vertical_position(&mut self, id: usize, pos: VerticalPosition) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.vertical_position = pos;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.vertical_position = pos;
         }
     }
 
     pub fn set_image_distance_from_text(&mut self, id: usize, dist: DistanceFromText) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.distance_from_text = dist;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.distance_from_text = dist;
         }
     }
 
     pub fn set_image_z_index(&mut self, id: usize, z: i32) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.z_index = z;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.z_index = z;
         }
     }
 
     pub fn set_image_move_with_text(&mut self, id: usize, flag: bool) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.move_with_text = flag;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.move_with_text = flag;
         }
     }
 
     pub fn set_image_lock_aspect_ratio(&mut self, id: usize, flag: bool) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.lock_aspect_ratio = flag;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.lock_aspect_ratio = flag;
         }
     }
 
     pub fn set_image_opacity(&mut self, id: usize, opacity: f32) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.opacity = opacity.clamp(0.0, 1.0);
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.opacity = opacity.clamp(0.0, 1.0);
         }
     }
 
     pub fn set_image_wrap_mode(&mut self, id: usize, wrap_mode: WrapMode) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.wrap_mode = wrap_mode;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.wrap_mode = wrap_mode;
         }
     }
 
     pub fn set_image_rendering(&mut self, id: usize, rendering: ImageRendering) {
-        for slot in &mut self.paragraph_images {
-            if let Some(image) = slot {
-                if image.id == id {
-                    image.rendering = rendering;
-                    return;
-                }
-            }
+        if let Some(image) = self.image_by_id_mut(id) {
+            image.rendering = rendering;
         }
+    }
+
+    pub fn image_by_id(&self, id: usize) -> Option<&DocumentImage> {
+        self.paragraph_images
+            .iter()
+            .flatten()
+            .find(|image| image.id == id)
+    }
+
+    pub fn move_image_paragraph_to_cursor(
+        &mut self,
+        id: usize,
+        target_char_index: usize,
+    ) -> Option<usize> {
+        let mut paragraphs = self.paragraphs();
+        let source_index = paragraphs
+            .iter()
+            .position(|paragraph| paragraph.image.as_ref().is_some_and(|image| image.id == id))?;
+
+        let total_chars = self.total_chars();
+        let mut target_index = if target_char_index >= total_chars {
+            paragraphs.len()
+        } else {
+            self.paragraph_index_at(target_char_index)
+                .min(paragraphs.len())
+        };
+
+        if source_index == target_index || source_index + 1 == target_index {
+            return paragraphs
+                .get(source_index)
+                .map(|paragraph| paragraph.range.start);
+        }
+
+        let moved = paragraphs.remove(source_index);
+        if source_index < target_index {
+            target_index -= 1;
+        }
+        let target_index = target_index.min(paragraphs.len());
+        paragraphs.insert(target_index, moved);
+        self.replace_paragraphs(paragraphs);
+
+        self.paragraphs()
+            .into_iter()
+            .find(|paragraph| paragraph.image.as_ref().is_some_and(|image| image.id == id))
+            .map(|paragraph| paragraph.range.start)
     }
 
     pub fn load_from_path(path: &Path) -> Result<Self, String> {
@@ -1104,6 +1106,44 @@ impl DocumentState {
             }
             offset += run_chars;
         }
+    }
+
+    fn image_by_id_mut(&mut self, id: usize) -> Option<&mut DocumentImage> {
+        self.paragraph_images
+            .iter_mut()
+            .flatten()
+            .find(|image| image.id == id)
+    }
+
+    fn replace_paragraphs(&mut self, paragraphs: Vec<Paragraph>) {
+        let mut runs = Vec::new();
+        let mut paragraph_styles = Vec::with_capacity(paragraphs.len());
+        let mut paragraph_images = Vec::with_capacity(paragraphs.len());
+        let paragraph_count = paragraphs.len();
+
+        for (index, paragraph) in paragraphs.into_iter().enumerate() {
+            paragraph_styles.push(paragraph.style);
+            paragraph_images.push(paragraph.image);
+            for run in paragraph.runs {
+                append_text_run(&mut runs, &run.text, run.style);
+            }
+            if index + 1 < paragraph_count {
+                append_text_run(&mut runs, "\n", CharacterStyle::default());
+            }
+        }
+
+        if runs.is_empty() {
+            runs.push(TextRun {
+                text: String::new(),
+                style: CharacterStyle::default(),
+            });
+        }
+
+        self.runs = runs;
+        self.paragraph_styles = paragraph_styles;
+        self.paragraph_images = paragraph_images;
+        self.normalize_runs();
+        self.ensure_paragraph_style_count();
     }
 
     fn normalize_runs(&mut self) {
@@ -1874,6 +1914,27 @@ mod tests {
         ImageRendering, ListKind, WrapMode, OBJECT_REPLACEMENT_CHAR,
     };
 
+    fn test_image(id: usize) -> DocumentImage {
+        DocumentImage {
+            id,
+            bytes: vec![1, 2, 3],
+            alt_text: format!("image-{id}"),
+            width_points: 120.0,
+            height_points: 60.0,
+            lock_aspect_ratio: true,
+            opacity: 1.0,
+            layout_mode: ImageLayoutMode::Inline,
+            wrap_mode: WrapMode::Inline,
+            rendering: ImageRendering::Smooth,
+            horizontal_position: Default::default(),
+            vertical_position: Default::default(),
+            distance_from_text: Default::default(),
+            z_index: 7,
+            move_with_text: true,
+            allow_overlap: false,
+        }
+    }
+
     #[test]
     fn inserts_page_break_between_split_paragraphs() {
         let mut document = DocumentState::bootstrap();
@@ -1943,6 +2004,92 @@ mod tests {
             document.plain_text(),
             format!("alpha \n{OBJECT_REPLACEMENT_CHAR}\nbeta")
         );
+    }
+
+    #[test]
+    fn moves_image_paragraph_later_without_extra_blank_lines() {
+        let image = test_image(7);
+        let mut document = DocumentState {
+            title: "Test".to_owned(),
+            runs: vec![super::TextRun {
+                text: format!("alpha\n{OBJECT_REPLACEMENT_CHAR}\nbeta\ngamma"),
+                style: CharacterStyle::default(),
+            }],
+            paragraph_styles: vec![
+                Default::default(),
+                super::ParagraphStyle {
+                    page_break_before: true,
+                    ..Default::default()
+                },
+                Default::default(),
+                Default::default(),
+            ],
+            paragraph_images: vec![None, Some(image.clone()), None, None],
+            page_size: super::PageSize::a4(),
+            margins: super::PageMargins::standard(),
+        };
+
+        let cursor = document
+            .move_image_paragraph_to_cursor(7, document.total_chars())
+            .expect("image should move");
+        let paragraphs = document.paragraphs();
+
+        assert_eq!(
+            document.plain_text(),
+            format!("alpha\nbeta\ngamma\n{OBJECT_REPLACEMENT_CHAR}")
+        );
+        assert_eq!(cursor, paragraphs[3].range.start);
+        assert_eq!(paragraphs[3].image.as_ref().map(|image| image.id), Some(7));
+        assert_eq!(paragraphs[3].image.as_ref().unwrap().z_index, image.z_index);
+        assert!(paragraphs[3].style.page_break_before);
+        assert_eq!(
+            document
+                .plain_text()
+                .chars()
+                .filter(|ch| *ch == '\n')
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn moves_image_paragraph_earlier_without_losing_metadata() {
+        let mut image = test_image(8);
+        image.layout_mode = ImageLayoutMode::Floating;
+        image.wrap_mode = WrapMode::Square;
+        image.horizontal_position.offset_points = 42.0;
+        let mut document = DocumentState {
+            title: "Test".to_owned(),
+            runs: vec![super::TextRun {
+                text: format!("alpha\nbeta\n{OBJECT_REPLACEMENT_CHAR}\ngamma"),
+                style: CharacterStyle::default(),
+            }],
+            paragraph_styles: vec![
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            ],
+            paragraph_images: vec![None, None, Some(image.clone()), None],
+            page_size: super::PageSize::a4(),
+            margins: super::PageMargins::standard(),
+        };
+
+        let cursor = document
+            .move_image_paragraph_to_cursor(8, 0)
+            .expect("image should move");
+        let paragraphs = document.paragraphs();
+
+        assert_eq!(
+            document.plain_text(),
+            format!("{OBJECT_REPLACEMENT_CHAR}\nalpha\nbeta\ngamma")
+        );
+        assert_eq!(cursor, 0);
+        let moved = paragraphs[0].image.as_ref().expect("moved image");
+        assert_eq!(moved.id, 8);
+        assert_eq!(moved.layout_mode, ImageLayoutMode::Floating);
+        assert_eq!(moved.wrap_mode, WrapMode::Square);
+        assert_eq!(moved.horizontal_position.offset_points, 42.0);
     }
 
     #[test]
