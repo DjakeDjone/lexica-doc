@@ -12,6 +12,12 @@ use super::GrammarConfig;
 const HEALTH_ATTEMPTS: usize = 10;
 const HEALTH_WAIT_MS: u64 = 300;
 
+#[cfg(target_os = "windows")]
+const JAVA_BIN: &str = "javaw";
+
+#[cfg(not(target_os = "windows"))]
+const JAVA_BIN: &str = "java";
+
 pub fn default_lt_jar_path() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -44,7 +50,7 @@ pub fn spawn_languagetool(config: &GrammarConfig) -> Result<Child> {
         );
     }
 
-    Command::new("java")
+    Command::new(JAVA_BIN)
         .current_dir(parent_dir)
         .arg("-jar")
         .arg(&config.lt_jar_path)
