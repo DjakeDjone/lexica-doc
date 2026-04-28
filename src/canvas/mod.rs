@@ -10,7 +10,7 @@ use eframe::egui::{
     epaint::text::cursor::CCursor,
     epaint::CornerRadius,
     text_selection::visuals::{paint_text_cursor, paint_text_selection},
-    Align2, Color32, FontFamily, FontId, Id, Rect, Sense, Stroke, StrokeKind,
+    Align2, Color32, EventFilter, FontFamily, FontId, Id, Rect, Sense, Stroke, StrokeKind,
 };
 
 use crate::{
@@ -108,6 +108,19 @@ pub fn paint_document_canvas(
     );
 
     let has_focus = ui.memory(|mem| mem.has_focus(editor_id));
+    if has_focus {
+        ui.memory_mut(|mem| {
+            mem.set_focus_lock_filter(
+                editor_id,
+                EventFilter {
+                    tab: true,
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    escape: false,
+                },
+            );
+        });
+    }
     if has_focus && handle_keyboard_input(ui, document, canvas, &document_layout.galley, history) {
         output.text_changed = true;
         document_layout = layout_document(ui, document, canvas, content_size.x);

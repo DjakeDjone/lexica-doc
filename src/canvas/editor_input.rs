@@ -173,12 +173,20 @@ pub(super) fn handle_keyboard_input(
                     Key::Backspace => {
                         let now = ui.input(|i| i.time);
                         history.checkpoint_coalesced(document, now);
-                        changed |= delete_backward(document, canvas);
+                        changed |= if modifiers.ctrl {
+                            delete_word_backward(document, canvas)
+                        } else {
+                            delete_backward(document, canvas)
+                        };
                     }
                     Key::Delete => {
                         let now = ui.input(|i| i.time);
                         history.checkpoint_coalesced(document, now);
-                        changed |= delete_forward(document, canvas);
+                        changed |= if modifiers.ctrl {
+                            delete_word_forward(document, canvas)
+                        } else {
+                            delete_forward(document, canvas)
+                        };
                     }
                     Key::Enter => {
                         let now = ui.input(|i| i.time);
@@ -336,4 +344,149 @@ fn delete_forward(document: &mut DocumentState, canvas: &mut CanvasState) -> boo
     document.delete_range(delete_start..delete_start + 1);
     canvas.selection = CCursorRange::one(CCursor::new(delete_start));
     true
+}
+
+fn delete_word_backward(document: &mut DocumentState, canvas: &mut CanvasState) -> bool {
+    let selected = canvas.selection.as_sorted_char_range();
+    if selected.start < selected.end {
+        document.delete_range(selected.clone());
+        canvas.selection = CCursorRange::one(CCursor::new(selected.start));
+        return true;
+    }
+
+    let text = document.plain_text();
+    let chars: Vec<char> = text.chars().collect();
+    let delete_end = canvas.selection.primary.index.min(chars.len());
+    if delete_end == 0 {
+        return false;
+    }
+
+    let mut delete_start = delete_end;
+    while delete_start > 0 && !is_word_char(chars[delete_start - 1]) {
+        delete_start -= 1;
+    }
+    while delete_start > 0 && is_word_char(chars[delete_start - 1]) {
+        delete_start -= 1;
+    }
+
+    if delete_start == delete_end {
+        delete_start = delete_start.saturating_sub(1);
+    }
+
+    document.delete_range(delete_start..delete_end);
+    canvas.selection = CCursorRange::one(CCursor::new(delete_start));
+    true
+}
+
+fn delete_word_forward(document: &mut DocumentState, canvas: &mut CanvasState) -> bool {
+    let selected = canvas.selection.as_sorted_char_range();
+    if selected.start < selected.end {
+        document.delete_range(selected.clone());
+        canvas.selection = CCursorRange::one(CCursor::new(selected.start));
+        return true;
+    }
+
+    let text = document.plain_text();
+    let chars: Vec<char> = text.chars().collect();
+    let delete_start = canvas.selection.primary.index.min(chars.len());
+    if delete_start >= chars.len() {
+        return false;
+    }
+
+    let mut delete_end = delete_start;
+    if !is_word_char(chars[delete_end]) {
+        while delete_end < chars.len() && !is_word_char(chars[delete_end]) {
+            delete_end += 1;
+        }
+    }
+    while delete_end < chars.len() && is_word_char(chars[delete_end]) {
+        delete_end += 1;
+    }
+
+    if delete_end == delete_start {
+        delete_end += 1;
+    }
+
+    document.delete_range(delete_start..delete_end);
+    canvas.selection = CCursorRange::one(CCursor::new(delete_start));
+    true
+}
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+#[cfg(test)]
+mod tests {
+    use eframe::egui::{epaint::text::cursor::CCursor, text_selection::CCursorRange};
+
+    use crate::{
+        app::CanvasState,
+        document::{CharacterStyle, DocumentState, TextRun},
+    };
+
+    use super::{delete_word_backward, delete_word_forward};
+
+    fn document_with_text(text: &str) -> DocumentState {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs(
+            "Test".to_owned(),
+            vec![TextRun {
+                text: text.to_owned(),
+                style: CharacterStyle::default(),
+            }],
+        );
+        document
+    }
+
+    fn canvas_with_cursor(index: usize) -> CanvasState {
+        CanvasState {
+            selection: CCursorRange::one(CCursor::new(index)),
+            ..CanvasState::default()
+        }
+    }
+
+    #[test]
+    fn ctrl_delete_removes_word_from_caret() {
+        let mut document = document_with_text("alpha beta");
+        let mut canvas = canvas_with_cursor(0);
+
+        assert!(delete_word_forward(&mut document, &mut canvas));
+
+        assert_eq!(document.plain_text(), " beta");
+        assert_eq!(canvas.selection.primary.index, 0);
+    }
+
+    #[test]
+    fn ctrl_delete_skips_separator_and_removes_next_word() {
+        let mut document = document_with_text("alpha beta");
+        let mut canvas = canvas_with_cursor(5);
+
+        assert!(delete_word_forward(&mut document, &mut canvas));
+
+        assert_eq!(document.plain_text(), "alpha");
+        assert_eq!(canvas.selection.primary.index, 5);
+    }
+
+    #[test]
+    fn ctrl_backspace_removes_word_before_caret() {
+        let mut document = document_with_text("alpha beta");
+        let mut canvas = canvas_with_cursor(10);
+
+        assert!(delete_word_backward(&mut document, &mut canvas));
+
+        assert_eq!(document.plain_text(), "alpha ");
+        assert_eq!(canvas.selection.primary.index, 6);
+    }
+
+    #[test]
+    fn ctrl_backspace_skips_separator_and_removes_previous_word() {
+        let mut document = document_with_text("alpha beta");
+        let mut canvas = canvas_with_cursor(6);
+
+        assert!(delete_word_backward(&mut document, &mut canvas));
+
+        assert_eq!(document.plain_text(), "beta");
+        assert_eq!(canvas.selection.primary.index, 0);
+    }
 }
