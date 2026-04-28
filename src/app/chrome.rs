@@ -80,7 +80,9 @@ pub(super) fn paint_title_bar(
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Unsaved document".to_owned());
 
-    egui::Frame::new()
+    // Render the title bar content first so buttons register their interactions
+    // before the drag overlay.
+    let frame_response = egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(12, 8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -144,6 +146,34 @@ pub(super) fn paint_title_bar(
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close_btn = egui::Button::new(egui::RichText::new("🗙").size(14.0).color(palette.title_fg))
+                        .min_size(egui::vec2(24.0, 24.0))
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::NONE);
+                    if ui.add(close_btn).on_hover_text("Close").clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+
+                    let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+                    let max_icon = if maximized { "🗗" } else { "🗖" };
+                    let max_btn = egui::Button::new(egui::RichText::new(max_icon).size(14.0).color(palette.title_fg))
+                        .min_size(egui::vec2(24.0, 24.0))
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::NONE);
+                    if ui.add(max_btn).on_hover_text(if maximized { "Restore" } else { "Maximize" }).clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    }
+
+                    let min_btn = egui::Button::new(egui::RichText::new("🗕").size(14.0).color(palette.title_fg))
+                        .min_size(egui::vec2(24.0, 24.0))
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::NONE);
+                    if ui.add(min_btn).on_hover_text("Minimize").clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+
+                    ui.separator();
+
                     if theme_switch(ui, theme_mode, palette, true) {
                         *status_target = format!("Theme switched to {}", theme_mode.label());
                     }
@@ -156,6 +186,41 @@ pub(super) fn paint_title_bar(
                 });
             });
         });
+
+    // Window drag and double-click: handled entirely via raw pointer input.
+    // We deliberately avoid ui.interact() here because ANY interaction overlay
+    // on the title bar rect steals events from the buttons inside it.
+    let title_rect = frame_response.response.rect;
+
+    // Drag to move window — only when pointer is decisively dragging (past
+    // threshold), the press originated inside the title bar, and no egui
+    // widget has already claimed the drag (e.g. a DragValue in the ribbon).
+    let is_dragging = ui.input(|i| i.pointer.is_decidedly_dragging());
+    let press_origin = ui.input(|i| i.pointer.press_origin());
+    let anything_dragged = ui.ctx().dragged_id().is_some();
+
+    if is_dragging {
+        if let Some(origin) = press_origin {
+            if title_rect.contains(origin) && !anything_dragged {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        }
+    }
+
+    // Double-click to maximize/restore.
+    if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+        if title_rect.contains(pos)
+            && ui.input(|i| {
+                i.pointer
+                    .button_double_clicked(egui::PointerButton::Primary)
+            })
+        {
+            let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+        }
+    }
 }
 
 pub(super) fn paint_tab_row(

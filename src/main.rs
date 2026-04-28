@@ -24,6 +24,7 @@ fn main() -> eframe::Result<()> {
             .with_title("wors")
             .with_inner_size([1400.0, 1000.0])
             .with_min_inner_size([960.0, 720.0])
+            .with_decorations(false)
             .with_icon(Arc::new(load_icon())),
         ..Default::default()
     };
