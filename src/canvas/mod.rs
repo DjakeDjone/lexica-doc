@@ -357,9 +357,11 @@ pub fn paint_document_canvas(
     }
 
     if has_focus && canvas.selected_image_id.is_none() {
-        if let Some(caret_rect) =
-            page_layout.caret_rect(&document_layout.galley, canvas.selection.primary)
-        {
+        if let Some(caret_rect) = page_layout.caret_rect(
+            &document_layout.galley,
+            canvas.selection.primary,
+            caret_height(canvas.active_style, canvas.zoom),
+        ) {
             paint_text_cursor(
                 ui,
                 &painter,
@@ -420,6 +422,15 @@ pub fn paint_document_canvas(
     }
 
     output
+}
+
+fn caret_height(style: CharacterStyle, zoom: f32) -> f32 {
+    let font_size = if style.bold {
+        style.font_size_points + 0.8
+    } else {
+        style.font_size_points
+    };
+    font_size.max(1.0) * zoom * 1.25
 }
 
 fn apply_grammar_replacement(

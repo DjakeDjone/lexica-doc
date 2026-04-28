@@ -32,8 +32,13 @@ impl PageLayout {
         })
     }
 
-    pub(super) fn caret_rect(&self, galley: &egui::Galley, cursor: CCursor) -> Option<Rect> {
-        let document_rect = caret_rect(galley, cursor);
+    pub(super) fn caret_rect(
+        &self,
+        galley: &egui::Galley,
+        cursor: CCursor,
+        height: f32,
+    ) -> Option<Rect> {
+        let document_rect = caret_rect(galley, cursor, height);
         self.pages.iter().find_map(|page| {
             if document_rect.center().y >= page.start_y && document_rect.center().y <= page.end_y {
                 Some(
@@ -87,13 +92,15 @@ pub(super) fn layout_page_stack(
     PageLayout { pages }
 }
 
-fn caret_rect(galley: &egui::Galley, cursor: CCursor) -> Rect {
+fn caret_rect(galley: &egui::Galley, cursor: CCursor, height: f32) -> Rect {
     let layout_cursor = galley.layout_from_cursor(cursor);
     let mut rect = galley.pos_from_cursor(cursor);
     if let Some(row) = galley.rows.get(layout_cursor.row) {
-        let height = row.row.height();
-        rect.min.y = row.pos.y;
-        rect.max.y = row.pos.y + height;
+        let row_min = row.min_y();
+        let row_max = row.max_y();
+        let height = height.clamp(1.0, row_max - row_min);
+        rect.max.y = row_max;
+        rect.min.y = (row_max - height).max(row_min);
     }
     rect.expand2(egui::vec2(0.75, 0.75))
 }
