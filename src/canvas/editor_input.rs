@@ -289,24 +289,9 @@ fn replace_selection_or_insert(document: &mut DocumentState, canvas: &mut Canvas
     let inserted_chars = text.chars().count();
     let next_index = insert_at + inserted_chars;
 
-    let transformed_insert_at = document.apply_markdown_shortcuts_at(insert_at);
-    if text.contains('\n') {
-        let new_line_start = document
-            .line_range_at(transformed_insert_at)
-            .end
-            .saturating_add(1);
-        canvas.selection = CCursorRange::one(CCursor::new(new_line_start));
-        canvas.active_style = document.typing_style_at(new_line_start);
-        canvas.active_paragraph_style = document.paragraph_style_at(new_line_start);
-        return;
-    }
-
-    let transformed_next_index = document.apply_markdown_shortcuts_at(next_index);
-    let line_end = document.line_range_at(transformed_next_index).end;
-    let cursor_index = transformed_next_index.min(line_end);
-    canvas.selection = CCursorRange::one(CCursor::new(cursor_index));
-    canvas.active_style = document.typing_style_at(cursor_index);
-    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+    canvas.selection = CCursorRange::one(CCursor::new(next_index));
+    canvas.active_style = document.typing_style_at(next_index);
+    canvas.active_paragraph_style = document.paragraph_style_at(next_index);
 }
 
 fn delete_backward(document: &mut DocumentState, canvas: &mut CanvasState) -> bool {

@@ -16,10 +16,7 @@ use printpdf::{
 use serde::Serialize;
 
 use docx::docx_to_document;
-use markdown::{
-    markdown_cursor_index_in_line, markdown_heading_prefix, markdown_line_replacement,
-    markdown_to_runs,
-};
+use markdown::markdown_to_runs;
 use text::{char_to_byte_index, line_char_range, slice_char_range, word_char_range};
 
 pub const OBJECT_REPLACEMENT_CHAR: char = '\u{fffc}';
@@ -469,11 +466,6 @@ impl DocumentState {
     pub fn typing_style_at(&self, char_index: usize) -> CharacterStyle {
         let cursor_index = char_index.min(self.total_chars());
         let line_range = self.line_range_at(cursor_index);
-        let line_text = self.selected_text(line_range.clone());
-
-        if let Some((_, style)) = markdown_heading_prefix(&line_text) {
-            return style;
-        }
 
         if line_range.start == line_range.end {
             return CharacterStyle::default();
@@ -488,21 +480,6 @@ impl DocumentState {
             .get(paragraph_index)
             .copied()
             .unwrap_or_default()
-    }
-
-    pub fn apply_markdown_shortcuts_at(&mut self, char_index: usize) -> usize {
-        let cursor_index = char_index.min(self.total_chars());
-        let line_range = self.line_range_at(cursor_index);
-        let line_text = self.selected_text(line_range.clone());
-        let cursor_in_line = cursor_index.saturating_sub(line_range.start);
-        let line_start = line_range.start;
-        let Some(replacement_runs) = markdown_line_replacement(&line_text) else {
-            return cursor_index;
-        };
-
-        self.replace_range_with_runs(line_range, replacement_runs);
-        let new_cursor_in_line = markdown_cursor_index_in_line(&line_text, cursor_in_line);
-        line_start + new_cursor_in_line
     }
 
     pub fn selected_text(&self, range: Range<usize>) -> String {
