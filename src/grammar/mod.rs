@@ -1,10 +1,14 @@
+#[cfg(not(target_arch = "wasm32"))]
 pub mod download;
 pub mod process;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod task;
 
 use std::path::PathBuf;
 
+#[cfg(not(target_arch = "wasm32"))]
 use anyhow::Result;
+#[cfg(not(target_arch = "wasm32"))]
 use serde::Deserialize;
 use whatlang::Lang;
 
@@ -60,12 +64,14 @@ pub enum GrammarStatus {
     Unavailable(String),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug)]
 pub struct GrammarChecker {
     client: reqwest::Client,
     port: u16,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl GrammarChecker {
     pub fn new(port: u16) -> Self {
         Self {
@@ -131,11 +137,13 @@ impl GrammarChecker {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Deserialize)]
 struct LtCheckResponse {
     matches: Vec<LtMatch>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Deserialize)]
 struct LtMatch {
     message: String,
@@ -148,11 +156,13 @@ struct LtMatch {
     rule: LtRule,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Deserialize)]
 struct LtReplacement {
     value: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Deserialize)]
 struct LtRule {
     id: String,
@@ -167,6 +177,7 @@ fn detect_language(text: &str) -> &'static str {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn char_offset_to_byte_index(text: &str, char_offset: usize) -> usize {
     text.char_indices()
         .nth(char_offset)

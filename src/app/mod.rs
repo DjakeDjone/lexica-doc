@@ -4,21 +4,26 @@ mod palette;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::Child;
 
 use eframe::{egui, App, CreationContext, Frame};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::grammar::{
+    download::{download_languagetool_server_jar, LT_STABLE_ZIP_URL},
+    process::{kill_languagetool, spawn_languagetool},
+    task::{run_grammar_task, GrammarRequest, GrammarTaskResult},
+    GrammarChecker,
+};
 use crate::{
     canvas::{paint_document_canvas, CanvasOutput},
     document::{CharacterStyle, DocumentState, ParagraphStyle},
-    grammar::{
-        download::{download_languagetool_server_jar, LT_STABLE_ZIP_URL},
-        process::{kill_languagetool, spawn_languagetool},
-        task::{run_grammar_task, GrammarRequest, GrammarTaskResult},
-        GrammarChecker, GrammarConfig, GrammarError, GrammarStatus,
-    },
+    grammar::{GrammarConfig, GrammarError, GrammarStatus},
 };
 
 use actions::handle_global_shortcuts;
@@ -33,6 +38,7 @@ const DOCX_CALADEA: &str = "docx-caladea";
 const DOCX_LIBERATION_SANS: &str = "docx-liberation-sans";
 const DOCX_LIBERATION_SERIF: &str = "docx-liberation-serif";
 const DOCX_LIBERATION_MONO: &str = "docx-liberation-mono";
+#[cfg(not(target_arch = "wasm32"))]
 const GRAMMAR_QUEUE_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +48,7 @@ enum GrammarDownloadStatus {
 }
 
 #[derive(Debug)]
+#[cfg(not(target_arch = "wasm32"))]
 enum GrammarDownloadResult {
     Ready(PathBuf),
     Failed(String),
@@ -248,13 +255,18 @@ pub struct WorsApp {
     grammar_config: GrammarConfig,
     grammar_errors: Vec<GrammarError>,
     grammar_status: GrammarStatus,
+    #[cfg(not(target_arch = "wasm32"))]
     grammar_tx: Option<mpsc::Sender<GrammarRequest>>,
+    #[cfg(not(target_arch = "wasm32"))]
     grammar_results_rx: Option<mpsc::Receiver<GrammarTaskResult>>,
+    #[cfg(not(target_arch = "wasm32"))]
     _grammar_runtime: Option<Runtime>,
+    #[cfg(not(target_arch = "wasm32"))]
     grammar_process: Option<Child>,
     grammar_warning_message: Option<String>,
     show_grammar_warning: bool,
     grammar_download_status: GrammarDownloadStatus,
+    #[cfg(not(target_arch = "wasm32"))]
     grammar_download_rx: Option<mpsc::UnboundedReceiver<GrammarDownloadResult>>,
     grammar_auto_check: bool,
 }
@@ -280,9 +292,22 @@ impl WorsApp {
         };
 
         let grammar_config = GrammarConfig::default();
+        #[cfg(not(target_arch = "wasm32"))]
         let mut grammar_status = GrammarStatus::Idle;
+        #[cfg(target_arch = "wasm32")]
+        let grammar_status = GrammarStatus::Unavailable(
+            "Grammar checking is not available in the web build".to_owned(),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
         let mut grammar_warning_message = None;
+        #[cfg(target_arch = "wasm32")]
+        let grammar_warning_message =
+            Some("Grammar checking is not available in the web build".to_owned());
+        #[cfg(not(target_arch = "wasm32"))]
         let mut show_grammar_warning = false;
+        #[cfg(target_arch = "wasm32")]
+        let show_grammar_warning = false;
+        #[cfg(not(target_arch = "wasm32"))]
         let grammar_runtime = match RuntimeBuilder::new_multi_thread().enable_all().build() {
             Ok(runtime) => Some(runtime),
             Err(error) => {
@@ -292,6 +317,7 @@ impl WorsApp {
             }
         };
 
+        #[cfg(not(target_arch = "wasm32"))]
         if !grammar_config.lt_jar_path.exists() {
             let message = format!(
                 "LanguageTool JAR not found at {}",
@@ -302,6 +328,7 @@ impl WorsApp {
             show_grammar_warning = true;
         }
 
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut app = Self {
             document: DocumentState::bootstrap(),
             canvas: CanvasState::default(),
@@ -314,17 +341,23 @@ impl WorsApp {
             grammar_config,
             grammar_errors: Vec::new(),
             grammar_status,
+            #[cfg(not(target_arch = "wasm32"))]
             grammar_tx: None,
+            #[cfg(not(target_arch = "wasm32"))]
             grammar_results_rx: None,
+            #[cfg(not(target_arch = "wasm32"))]
             _grammar_runtime: grammar_runtime,
+            #[cfg(not(target_arch = "wasm32"))]
             grammar_process: None,
             grammar_warning_message,
             show_grammar_warning,
             grammar_download_status: GrammarDownloadStatus::Idle,
+            #[cfg(not(target_arch = "wasm32"))]
             grammar_download_rx: None,
             grammar_auto_check: true,
         };
 
+        #[cfg(not(target_arch = "wasm32"))]
         if app.grammar_config.lt_jar_path.exists() {
             if let Err(message) = app.start_grammar_service() {
                 app.grammar_status = GrammarStatus::Unavailable(message);
@@ -334,6 +367,7 @@ impl WorsApp {
         app
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn start_grammar_service(&mut self) -> Result<(), String> {
         self.stop_grammar_service();
 
@@ -367,6 +401,12 @@ impl WorsApp {
         Ok(())
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn start_grammar_service(&mut self) -> Result<(), String> {
+        Err("Grammar checking is not available in the web build".to_owned())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn stop_grammar_service(&mut self) {
         self.grammar_tx = None;
         self.grammar_results_rx = None;
@@ -375,6 +415,9 @@ impl WorsApp {
         }
         self.grammar_process = None;
     }
+
+    #[cfg(target_arch = "wasm32")]
+    fn stop_grammar_service(&mut self) {}
 
     fn restart_grammar_service(&mut self) {
         match self.start_grammar_service() {
@@ -391,6 +434,7 @@ impl WorsApp {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn poll_grammar_results(&mut self) {
         let Some(results_rx) = self.grammar_results_rx.as_mut() else {
             return;
@@ -409,6 +453,10 @@ impl WorsApp {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn poll_grammar_results(&mut self) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn start_grammar_download(&mut self) {
         if self.grammar_download_status == GrammarDownloadStatus::Downloading {
             return;
@@ -439,6 +487,15 @@ impl WorsApp {
         ));
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn start_grammar_download(&mut self) {
+        self.grammar_status = GrammarStatus::Unavailable(
+            "Grammar downloads are not available in the web build".to_owned(),
+        );
+        self.status_message = "Grammar download unavailable on web".to_owned();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn poll_grammar_download(&mut self) {
         let mut drained = Vec::new();
         if let Some(rx) = self.grammar_download_rx.as_mut() {
@@ -481,6 +538,10 @@ impl WorsApp {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn poll_grammar_download(&mut self) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn request_grammar_check(&mut self, force: bool) {
         if !force && !self.grammar_auto_check {
             return;
@@ -541,6 +602,9 @@ impl WorsApp {
             }
         }
     }
+
+    #[cfg(target_arch = "wasm32")]
+    fn request_grammar_check(&mut self, _force: bool) {}
 }
 
 impl Drop for WorsApp {
@@ -604,6 +668,10 @@ impl App for WorsApp {
 
         let palette = theme_palette(self.theme_mode);
         let status_line = self.status_message.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let grammar_download_available = self._grammar_runtime.is_some();
+        #[cfg(target_arch = "wasm32")]
+        let grammar_download_available = false;
         configure_theme(ui.ctx(), self.theme_mode, palette);
 
         egui::Panel::top("title_bar")
@@ -655,7 +723,7 @@ impl App for WorsApp {
                     &mut self.grammar_config,
                     &self.grammar_status,
                     &mut self.grammar_auto_check,
-                    self._grammar_runtime.is_some(),
+                    grammar_download_available,
                     palette,
                 );
             });
@@ -746,7 +814,7 @@ impl App for WorsApp {
                             });
                             ui.ctx().request_repaint();
                         } else {
-                            let can_download = self._grammar_runtime.is_some();
+                            let can_download = grammar_download_available;
                             if ui
                                 .add_enabled(
                                     can_download,

@@ -27,6 +27,22 @@ The Windows installer downloads the source, builds it with Cargo, installs `wors
 wors
 ```
 
+## Run In The Browser
+
+Install Trunk if needed:
+
+```bash
+cargo install trunk
+rustup target add wasm32-unknown-unknown
+```
+
+Serve the editor locally:
+
+```bash
+trunk serve --open
+```
+
+The web build uses the same editor UI as the desktop app. Desktop-only integrations such as native file dialogs and the local LanguageTool process are disabled in the browser build.
 
 ## Todos
 

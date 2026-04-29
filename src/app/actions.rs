@@ -1,14 +1,20 @@
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use eframe::egui;
+#[cfg(not(target_arch = "wasm32"))]
 use rfd::FileDialog;
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::document::DocumentImage;
 use crate::document::{
-    CharacterStyle, DocumentImage, DocumentState, FontChoice, ListKind, ParagraphAlignment,
-    ParagraphStyle,
+    CharacterStyle, DocumentState, FontChoice, ListKind, ParagraphAlignment, ParagraphStyle,
 };
 
-use super::{CanvasState, ChangeHistory, ZoomMode};
+#[cfg(not(target_arch = "wasm32"))]
+use super::ZoomMode;
+use super::{CanvasState, ChangeHistory};
 
 pub(super) fn open_document(
     document: &mut DocumentState,
@@ -17,6 +23,13 @@ pub(super) fn open_document(
     current_path: &mut Option<PathBuf>,
     history: &mut ChangeHistory,
 ) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        *status_message = "Opening local files is not available in the web build yet".to_owned();
+        let _ = (document, canvas, current_path, history);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     if let Some(path) = FileDialog::new()
         .add_filter("supported", &["txt", "md", "markdown", "docx"])
         .pick_file()
@@ -70,25 +83,34 @@ pub(super) fn save_document(
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
 ) {
-    let path = match current_path.clone() {
-        Some(path) => path,
-        None => match pick_save_path(document) {
-            Some(path) => path,
-            None => return,
-        },
-    };
+    #[cfg(target_arch = "wasm32")]
+    {
+        *status_message = "Saving local files is not available in the web build yet".to_owned();
+        let _ = (document, current_path);
+    }
 
-    match document.save_to_path(&path) {
-        Ok(()) => {
-            *current_path = Some(path.clone());
-            *status_message = format!(
-                "Saved {}",
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("document")
-            );
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = match current_path.clone() {
+            Some(path) => path,
+            None => match pick_save_path(document) {
+                Some(path) => path,
+                None => return,
+            },
+        };
+
+        match document.save_to_path(&path) {
+            Ok(()) => {
+                *current_path = Some(path.clone());
+                *status_message = format!(
+                    "Saved {}",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("document")
+                );
+            }
+            Err(error) => *status_message = error,
         }
-        Err(error) => *status_message = error,
     }
 }
 
@@ -97,24 +119,34 @@ pub(super) fn save_document_as(
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
 ) {
-    let Some(path) = pick_save_path(document) else {
-        return;
-    };
+    #[cfg(target_arch = "wasm32")]
+    {
+        *status_message = "Save As is not available in the web build yet".to_owned();
+        let _ = (document, current_path);
+    }
 
-    match document.save_to_path(&path) {
-        Ok(()) => {
-            *current_path = Some(path.clone());
-            *status_message = format!(
-                "Saved {}",
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("document")
-            );
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(path) = pick_save_path(document) else {
+            return;
+        };
+
+        match document.save_to_path(&path) {
+            Ok(()) => {
+                *current_path = Some(path.clone());
+                *status_message = format!(
+                    "Saved {}",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("document")
+                );
+            }
+            Err(error) => *status_message = error,
         }
-        Err(error) => *status_message = error,
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn pick_save_path(document: &DocumentState) -> Option<PathBuf> {
     FileDialog::new()
         .add_filter("text", &["txt"])
@@ -153,68 +185,77 @@ pub(super) fn insert_image(
     status_message: &mut String,
     history: &mut ChangeHistory,
 ) {
-    let Some(path) = FileDialog::new()
-        .add_filter("images", &["png", "jpg", "jpeg", "gif", "bmp"])
-        .pick_file()
-    else {
-        return;
-    };
+    #[cfg(target_arch = "wasm32")]
+    {
+        *status_message = "Inserting local images is not available in the web build yet".to_owned();
+        let _ = (document, canvas, history);
+    }
 
-    let image = match load_image_for_document(&path, document) {
-        Ok(image) => image,
-        Err(error) => {
-            *status_message = error;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(path) = FileDialog::new()
+            .add_filter("images", &["png", "jpg", "jpeg", "gif", "bmp"])
+            .pick_file()
+        else {
+            return;
+        };
+
+        let image = match load_image_for_document(&path, document) {
+            Ok(image) => image,
+            Err(error) => {
+                *status_message = error;
+                return;
+            }
+        };
+
+        history.checkpoint(document, f64::NAN);
+        if let Some((table_id, row, col)) = canvas.active_table_cell {
+            document.insert_table_cell_image(table_id, row, col, image, canvas.active_style);
+            if let Some(len) = document.table_cell_len(table_id, row, col) {
+                canvas.table_cell_selection = egui::text_selection::CCursorRange::one(
+                    egui::epaint::text::cursor::CCursor::new(len),
+                );
+            }
+            canvas.selected_image_id = None;
+            canvas.resize_drag = None;
+            canvas.move_drag = None;
+            canvas.table_resize_drag = None;
+            canvas.image_textures.clear();
+            *status_message = format!(
+                "Inserted {} into table cell",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("image")
+            );
             return;
         }
-    };
 
-    history.checkpoint(document, f64::NAN);
-    if let Some((table_id, row, col)) = canvas.active_table_cell {
-        document.insert_table_cell_image(table_id, row, col, image, canvas.active_style);
-        if let Some(len) = document.table_cell_len(table_id, row, col) {
-            canvas.table_cell_selection = egui::text_selection::CCursorRange::one(
-                egui::epaint::text::cursor::CCursor::new(len),
-            );
+        let selected = canvas.selection.as_sorted_char_range();
+        let insert_at = selected.start;
+        if selected.start < selected.end {
+            document.delete_range(selected);
         }
-        canvas.selected_image_id = None;
+
+        let image_id = image.id;
+        let cursor_index = document.insert_image(insert_at, image);
+        canvas.selection = egui::text_selection::CCursorRange::one(
+            egui::epaint::text::cursor::CCursor::new(cursor_index),
+        );
+        canvas.active_style = document.typing_style_at(cursor_index);
+        canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+        canvas.selected_image_id = Some(image_id);
+        canvas.active_table_cell = None;
         canvas.resize_drag = None;
         canvas.move_drag = None;
         canvas.table_resize_drag = None;
         canvas.image_textures.clear();
         *status_message = format!(
-            "Inserted {} into table cell",
+            "Inserted {}",
             path.file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("image")
         );
-        return;
     }
-
-    let selected = canvas.selection.as_sorted_char_range();
-    let insert_at = selected.start;
-    if selected.start < selected.end {
-        document.delete_range(selected);
-    }
-
-    let image_id = image.id;
-    let cursor_index = document.insert_image(insert_at, image);
-    canvas.selection = egui::text_selection::CCursorRange::one(
-        egui::epaint::text::cursor::CCursor::new(cursor_index),
-    );
-    canvas.active_style = document.typing_style_at(cursor_index);
-    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
-    canvas.selected_image_id = Some(image_id);
-    canvas.active_table_cell = None;
-    canvas.resize_drag = None;
-    canvas.move_drag = None;
-    canvas.table_resize_drag = None;
-    canvas.image_textures.clear();
-    *status_message = format!(
-        "Inserted {}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("image")
-    );
 }
 
 pub(super) fn handle_global_shortcuts(
@@ -528,6 +569,7 @@ fn apply_selection_or_active_style(
     mutate(&mut canvas.active_style);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load_image_for_document(
     path: &PathBuf,
     document: &DocumentState,

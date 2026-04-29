@@ -1,24 +1,36 @@
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
-    path::PathBuf,
     process::{Child, Command, Stdio},
     time::Duration,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 use anyhow::{bail, Context, Result};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::sleep;
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::GrammarConfig;
 
+#[cfg(not(target_arch = "wasm32"))]
 const HEALTH_ATTEMPTS: usize = 10;
+#[cfg(not(target_arch = "wasm32"))]
 const HEALTH_WAIT_MS: u64 = 300;
 
 #[cfg(target_os = "windows")]
 const JAVA_BIN: &str = "javaw";
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), not(target_arch = "wasm32")))]
 const JAVA_BIN: &str = "java";
 
 pub fn default_lt_jar_path() -> PathBuf {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return PathBuf::from("languagetool-server.jar");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     std::env::current_exe()
         .ok()
         .and_then(|exe| {
@@ -28,6 +40,7 @@ pub fn default_lt_jar_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("languagetool-server.jar"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn_languagetool(config: &GrammarConfig) -> Result<Child> {
     if !config.lt_jar_path.exists() {
         bail!(
@@ -70,11 +83,13 @@ pub fn spawn_languagetool(config: &GrammarConfig) -> Result<Child> {
         })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn kill_languagetool(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn wait_until_ready(client: &reqwest::Client, port: u16) -> bool {
     let url = format!("http://localhost:{port}/v2/languages");
     for _ in 0..HEALTH_ATTEMPTS {
