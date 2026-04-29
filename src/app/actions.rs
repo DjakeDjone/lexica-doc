@@ -154,44 +154,122 @@ pub(super) fn save_document_as(
     }
 }
 
+pub(super) fn save_document_as_with_name(
+    document: &DocumentState,
+    status_message: &mut String,
+    current_path: &mut Option<PathBuf>,
+    file_name: &str,
+    extension: &str,
+) {
+    let suggested_name = suggested_save_name(file_name, extension);
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        match download_document_as(document, &suggested_name, extension) {
+            Ok(filename) => *status_message = format!("Downloaded {filename}"),
+            Err(error) => *status_message = error,
+        }
+        let _ = current_path;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let Some(path) = pick_save_path_with_file_name(&suggested_name) else {
+            return;
+        };
+
+        match document.save_to_path(&path) {
+            Ok(()) => {
+                *current_path = Some(path.clone());
+                *status_message = format!(
+                    "Saved {}",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("document")
+                );
+            }
+            Err(error) => *status_message = error,
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn pick_save_path(document: &DocumentState) -> Option<PathBuf> {
+    pick_save_path_with_file_name(&document.title)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pick_save_path_with_file_name(file_name: &str) -> Option<PathBuf> {
     FileDialog::new()
         .add_filter("text", &["txt"])
         .add_filter("markdown", &["md", "markdown"])
         .add_filter("web (formatted)", &["html", "htm"])
         .add_filter("pdf", &["pdf"])
-        .set_file_name(&document.title)
+        .set_file_name(file_name)
         .save_file()
 }
 
 #[cfg(target_arch = "wasm32")]
 fn download_document(document: &DocumentState) -> Result<String, String> {
-    let filename = download_filename(&document.title, "html");
-    let bytes = document.export_bytes_for_extension("html")?;
-    download_bytes(&filename, "text/html;charset=utf-8", &bytes)?;
+    let filename = download_document_as(document, &document.title, "html")?;
     Ok(filename)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn download_filename(title: &str, extension: &str) -> String {
-    let mut stem: String = title
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ' ') {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    stem = stem.trim().replace(' ', "-");
-    while stem.contains("--") {
-        stem = stem.replace("--", "-");
+fn download_document_as(
+    document: &DocumentState,
+    file_name: &str,
+    extension: &str,
+) -> Result<String, String> {
+    let filename = suggested_save_name(file_name, extension);
+    let extension = extension.trim_start_matches('.');
+    let bytes = document.export_bytes_for_extension(extension)?;
+    download_bytes(&filename, mime_type_for_extension(extension), &bytes)?;
+    Ok(filename)
+}
+
+fn suggested_save_name(file_name: &str, extension: &str) -> String {
+    let extension = extension.trim_start_matches('.').to_ascii_lowercase();
+    let fallback = if file_name.trim().is_empty() {
+        "document"
+    } else {
+        file_name.trim()
+    };
+    let path = std::path::Path::new(fallback);
+    let mut name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("document")
+        .trim()
+        .to_owned();
+    if name.is_empty() {
+        name = "document".to_owned();
     }
-    let stem = stem.trim_matches('-');
-    let stem = if stem.is_empty() { "document" } else { stem };
-    format!("{stem}.{extension}")
+    let has_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(&extension));
+    if !extension.is_empty() && !has_extension {
+        if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+            if !stem.trim().is_empty() {
+                name = stem.trim().to_owned();
+            }
+        }
+        name.push('.');
+        name.push_str(&extension);
+    }
+    name
+}
+
+#[cfg(target_arch = "wasm32")]
+fn mime_type_for_extension(extension: &str) -> &'static str {
+    match extension {
+        "md" | "markdown" => "text/markdown;charset=utf-8",
+        "txt" => "text/plain;charset=utf-8",
+        "pdf" => "application/pdf",
+        "html" | "htm" => "text/html;charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

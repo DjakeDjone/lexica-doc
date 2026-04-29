@@ -26,8 +26,11 @@ use crate::{
     grammar::{GrammarConfig, GrammarError, GrammarStatus},
 };
 
-use actions::handle_global_shortcuts;
-use chrome::{paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar, RibbonTab};
+use actions::{handle_global_shortcuts, open_document, save_document, save_document_as_with_name};
+use chrome::{
+    paint_backstage, paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar,
+    BackstageState, RibbonTab,
+};
 use palette::{configure_theme, theme_palette};
 
 pub use palette::ThemeMode;
@@ -250,6 +253,7 @@ pub struct WorsApp {
     history: ChangeHistory,
     active_tab: RibbonTab,
     theme_mode: ThemeMode,
+    backstage: BackstageState,
     status_message: String,
     current_path: Option<PathBuf>,
     logo_texture: egui::TextureHandle,
@@ -336,6 +340,7 @@ impl WorsApp {
             history: ChangeHistory::new(),
             active_tab: RibbonTab::Home,
             theme_mode,
+            backstage: BackstageState::default(),
             status_message: "Ready".to_owned(),
             current_path: None,
             logo_texture,
@@ -697,56 +702,114 @@ impl App for WorsApp {
                 );
             });
 
-        egui::Panel::top("tabs_bar")
-            .frame(egui::Frame::new().fill(palette.tab_bg))
-            .show_inside(ui, |ui| {
-                paint_tab_row(
-                    ui,
-                    &mut self.active_tab,
-                    self.canvas.selected_image_id,
-                    self.canvas.active_table_cell,
-                    palette,
-                );
-            });
+        if !self.backstage.visible {
+            let mut file_requested = false;
+            egui::Panel::top("tabs_bar")
+                .frame(egui::Frame::new().fill(palette.tab_bg))
+                .show_inside(ui, |ui| {
+                    file_requested = paint_tab_row(
+                        ui,
+                        &mut self.active_tab,
+                        self.canvas.selected_image_id,
+                        self.canvas.active_table_cell,
+                        palette,
+                    );
+                });
+            if file_requested {
+                self.backstage
+                    .open_save_as(&self.document, &self.current_path);
+            }
+        }
+        if self.backstage.visible
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.backstage.visible = false;
+        }
 
         let mut grammar_ribbon_output = chrome::GrammarRibbonOutput::default();
-        egui::Panel::top("ribbon")
-            .frame(
-                egui::Frame::new()
-                    .fill(palette.ribbon_bg)
-                    .stroke(egui::Stroke::new(1.0, palette.border)),
-            )
-            .show_inside(ui, |ui| {
-                grammar_ribbon_output = paint_ribbon(
-                    ui,
-                    &mut self.document,
-                    &mut self.canvas,
-                    &mut self.active_tab,
+        let mut canvas_output = CanvasOutput::default();
+        if self.backstage.visible {
+            let mut backstage_output = chrome::BackstageOutput::default();
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(palette.workspace_bg))
+                .show_inside(ui, |ui| {
+                    backstage_output = paint_backstage(
+                        ui,
+                        &mut self.backstage,
+                        &self.document,
+                        &self.current_path,
+                        palette,
+                    );
+                });
+
+            if backstage_output.close_requested {
+                self.backstage.visible = false;
+            }
+            if backstage_output.save_requested {
+                save_document(
+                    &self.document,
                     &mut self.status_message,
                     &mut self.current_path,
-                    &mut self.theme_mode,
-                    &mut self.history,
-                    &mut self.grammar_config,
-                    &self.grammar_status,
-                    &mut self.grammar_auto_check,
-                    grammar_download_available,
-                    palette,
                 );
-            });
-
-        let mut canvas_output = CanvasOutput::default();
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(palette.workspace_bg))
-            .show_inside(ui, |ui| {
-                canvas_output = paint_document_canvas(
-                    ui,
+            }
+            if backstage_output.save_as_requested {
+                save_document_as_with_name(
+                    &self.document,
+                    &mut self.status_message,
+                    &mut self.current_path,
+                    &self.backstage.file_name,
+                    self.backstage.format.extension(),
+                );
+            }
+            if backstage_output.open_requested {
+                open_document(
                     &mut self.document,
                     &mut self.canvas,
-                    self.theme_mode,
+                    &mut self.status_message,
+                    &mut self.current_path,
                     &mut self.history,
-                    &self.grammar_errors,
                 );
-            });
+                self.backstage
+                    .open_save_as(&self.document, &self.current_path);
+            }
+        } else {
+            egui::Panel::top("ribbon")
+                .frame(
+                    egui::Frame::new()
+                        .fill(palette.ribbon_bg)
+                        .stroke(egui::Stroke::new(1.0, palette.border)),
+                )
+                .show_inside(ui, |ui| {
+                    grammar_ribbon_output = paint_ribbon(
+                        ui,
+                        &mut self.document,
+                        &mut self.canvas,
+                        &mut self.active_tab,
+                        &mut self.status_message,
+                        &mut self.current_path,
+                        &mut self.theme_mode,
+                        &mut self.history,
+                        &mut self.grammar_config,
+                        &self.grammar_status,
+                        &mut self.grammar_auto_check,
+                        grammar_download_available,
+                        palette,
+                    );
+                });
+
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(palette.workspace_bg))
+                .show_inside(ui, |ui| {
+                    canvas_output = paint_document_canvas(
+                        ui,
+                        &mut self.document,
+                        &mut self.canvas,
+                        self.theme_mode,
+                        &mut self.history,
+                        &self.grammar_errors,
+                    );
+                });
+        }
 
         if grammar_ribbon_output.download_requested {
             self.start_grammar_download();
