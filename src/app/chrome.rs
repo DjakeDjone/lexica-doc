@@ -292,7 +292,7 @@ pub(super) fn paint_tab_row(
                         } else {
                             egui::Stroke::NONE
                         })
-                        .corner_radius(4.0);
+                        .corner_radius(0.0);
                     if ui.add(button).clicked() {
                         *active_tab = tab;
                     }
@@ -327,7 +327,7 @@ pub(super) fn paint_tab_row(
                     } else {
                         egui::Stroke::NONE
                     })
-                    .corner_radius(4.0);
+                    .corner_radius(0.0);
                     if ui.add(button).clicked() {
                         *active_tab = RibbonTab::Picture;
                     }
@@ -360,7 +360,7 @@ pub(super) fn paint_tab_row(
                     } else {
                         egui::Stroke::NONE
                     })
-                    .corner_radius(4.0);
+                    .corner_radius(0.0);
                     if ui.add(button).clicked() {
                         *active_tab = RibbonTab::Table;
                     }
