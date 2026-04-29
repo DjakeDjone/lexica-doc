@@ -82,6 +82,7 @@ pub(super) fn configure_theme(ctx: &egui::Context, mode: ThemeMode, palette: The
         ThemeMode::Light => egui::Visuals::light(),
         ThemeMode::Dark => egui::Visuals::dark(),
     };
+    style.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
     style.visuals.override_text_color = Some(palette.text_primary);
     style.visuals.widgets.inactive.bg_fill = palette.ribbon_group_bg;
     style.visuals.widgets.inactive.weak_bg_fill = palette.status_bg;

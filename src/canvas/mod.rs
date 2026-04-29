@@ -395,6 +395,7 @@ pub fn paint_document_canvas(
             document,
         );
     }
+    update_canvas_hover_cursor(ui, &response, canvas, &page_layout);
 
     // Draw ghost image if dragging
     if let Some(move_drag) = &canvas.move_drag {
@@ -494,6 +495,48 @@ pub fn paint_document_canvas(
     }
 
     output
+}
+
+fn update_canvas_hover_cursor(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    canvas: &CanvasState,
+    page_layout: &PageLayout,
+) {
+    if response.dragged() {
+        return;
+    }
+
+    let Some(hover_pos) = ui.ctx().pointer_hover_pos() else {
+        return;
+    };
+    if !response.rect.contains(hover_pos) {
+        return;
+    }
+
+    let cursor_icon = if let Some(handle) = table_resize_handle_hit(canvas, hover_pos) {
+        match handle.kind {
+            TableResizeKind::Column { .. } => egui::CursorIcon::ResizeEast,
+            TableResizeKind::Row { .. } => egui::CursorIcon::ResizeSouth,
+        }
+    } else if table_cell_hit(canvas, hover_pos).is_some() {
+        egui::CursorIcon::Text
+    } else if let Some((_, handle)) = image_handle_hit(canvas, hover_pos, 6.0) {
+        match handle {
+            ResizeHandle::NW | ResizeHandle::SE => egui::CursorIcon::ResizeNwSe,
+            ResizeHandle::NE | ResizeHandle::SW => egui::CursorIcon::ResizeNeSw,
+            ResizeHandle::N | ResizeHandle::S => egui::CursorIcon::ResizeSouth,
+            ResizeHandle::E | ResizeHandle::W => egui::CursorIcon::ResizeEast,
+        }
+    } else if image_body_hit(canvas, hover_pos).is_some() {
+        egui::CursorIcon::Grab
+    } else if page_layout.document_pos(hover_pos).is_some() {
+        egui::CursorIcon::Text
+    } else {
+        return;
+    };
+
+    ui.ctx().set_cursor_icon(cursor_icon);
 }
 
 fn caret_height(style: CharacterStyle, zoom: f32) -> f32 {
