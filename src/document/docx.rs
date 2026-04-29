@@ -9,8 +9,9 @@ use quick_xml::{events::Event as XmlEvent, Reader};
 use zip::ZipArchive;
 
 use crate::document::{
-    CharacterStyle, DocumentImage, FontChoice, LineSpacing, LineSpacingKind, ListKind, PageMargins,
-    PageSize, ParagraphAlignment, ParagraphStyle, TextRun, OBJECT_REPLACEMENT_CHAR,
+    CharacterStyle, DocumentImage, DocumentTable, FontChoice, LineSpacing, LineSpacingKind,
+    ListKind, PageMargins, PageSize, ParagraphAlignment, ParagraphStyle, TableCell, TextRun,
+    OBJECT_REPLACEMENT_CHAR,
 };
 use serde::Serialize;
 
@@ -25,6 +26,7 @@ pub struct ImportedDocx {
     pub runs: Vec<TextRun>,
     pub paragraph_styles: Vec<ParagraphStyle>,
     pub paragraph_images: Vec<Option<DocumentImage>>,
+    pub paragraph_tables: Vec<Option<DocumentTable>>,
     pub page_size: Option<PageSize>,
     pub margins: Option<PageMargins>,
 }
@@ -143,6 +145,7 @@ fn parse_document_xml(
     let mut runs = Vec::new();
     let mut paragraph_styles = Vec::new();
     let mut paragraph_images = Vec::new();
+    let mut paragraph_tables = Vec::new();
     let mut paragraph_run_style = styles.default_run_style();
     let mut run_style = paragraph_run_style;
     let mut paragraph_style = styles.default_paragraph_style();
@@ -154,6 +157,7 @@ fn parse_document_xml(
     let mut page_size = None;
     let mut margins = None;
     let mut next_image_id = 1usize;
+    let mut next_table_id = 1usize;
 
     loop {
         match reader.read_event() {
@@ -167,6 +171,24 @@ fn parse_document_xml(
                     current_paragraph_image = None;
                     current_num_id = None;
                     current_ilvl = None;
+                }
+                b"tbl" => {
+                    let available_width = page_size.unwrap_or_else(PageSize::a4).width_points
+                        - margins.unwrap_or_else(PageMargins::standard).left_points
+                        - margins.unwrap_or_else(PageMargins::standard).right_points;
+                    let table = parse_docx_table(&mut reader, next_table_id, available_width)?;
+                    next_table_id += 1;
+                    if !paragraph_styles.is_empty() {
+                        append_plain(&mut runs, "\n", CharacterStyle::default());
+                    }
+                    append_plain(
+                        &mut runs,
+                        &OBJECT_REPLACEMENT_CHAR.to_string(),
+                        CharacterStyle::default(),
+                    );
+                    paragraph_styles.push(ParagraphStyle::default());
+                    paragraph_images.push(None);
+                    paragraph_tables.push(Some(table));
                 }
                 b"r" => {
                     run_style = paragraph_run_style;
@@ -445,6 +467,7 @@ fn parse_document_xml(
                         numbering.lookup(current_num_id.as_deref(), current_ilvl.as_deref());
                     paragraph_styles.push(paragraph_style);
                     paragraph_images.push(current_paragraph_image.clone());
+                    paragraph_tables.push(None);
                 }
                 _ => {}
             },
@@ -467,14 +490,230 @@ fn parse_document_xml(
     if paragraph_images.is_empty() {
         paragraph_images.push(None);
     }
+    if paragraph_tables.is_empty() {
+        paragraph_tables.push(None);
+    }
 
     Ok(ImportedDocx {
         runs,
         paragraph_styles,
         paragraph_images,
+        paragraph_tables,
         page_size,
         margins,
     })
+}
+
+fn parse_docx_table(
+    reader: &mut Reader<&[u8]>,
+    table_id: usize,
+    available_width: f32,
+) -> Result<DocumentTable, String> {
+    let mut rows: Vec<Vec<TableCell>> = Vec::new();
+    let mut col_widths_points: Vec<f32> = Vec::new();
+    let mut row_heights_points: Vec<f32> = Vec::new();
+    let mut current_row: Option<Vec<TableCell>> = None;
+    let mut current_cell_runs: Option<Vec<TextRun>> = None;
+    let mut current_text = false;
+    let mut current_run_style = CharacterStyle::default();
+    let mut current_row_height = None::<f32>;
+
+    loop {
+        match reader.read_event() {
+            Ok(XmlEvent::Start(event)) => match local_name(event.name().as_ref()) {
+                b"tr" => {
+                    current_row = Some(Vec::new());
+                    current_row_height = None;
+                }
+                b"tc" => current_cell_runs = Some(Vec::new()),
+                b"r" => current_run_style = CharacterStyle::default(),
+                b"t" => current_text = true,
+                b"tab" if current_cell_runs.is_some() => {
+                    if let Some(runs) = current_cell_runs.as_mut() {
+                        append_plain(runs, "\t", current_run_style);
+                    }
+                }
+                b"br" | b"cr" if current_cell_runs.is_some() => {
+                    if let Some(runs) = current_cell_runs.as_mut() {
+                        append_plain(runs, "\n", current_run_style);
+                    }
+                }
+                b"gridCol" => {
+                    if let Some(width) = attr_value(&event, b"w")
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .map(twips_to_points)
+                    {
+                        col_widths_points.push(width.max(18.0));
+                    }
+                }
+                b"trHeight" => {
+                    current_row_height = attr_value(&event, b"val")
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .map(twips_to_points);
+                }
+                b"rFonts" => {
+                    if let Some(font) = resolve_font_from_event_without_theme(&event) {
+                        apply_resolved_font(&mut current_run_style, font);
+                    }
+                }
+                b"b" => current_run_style.bold = docx_flag(&event, true),
+                b"i" => current_run_style.italic = docx_flag(&event, true),
+                b"u" => {
+                    current_run_style.underline =
+                        !matches!(attr_value(&event, b"val").as_deref(), Some("none"))
+                }
+                b"sz" => {
+                    if let Some(value) = attr_value(&event, b"val") {
+                        if let Ok(half_points) = value.parse::<f32>() {
+                            current_run_style.font_size_points =
+                                (half_points / 2.0).clamp(8.0, 72.0);
+                        }
+                    }
+                }
+                b"color" => {
+                    if let Some(value) = attr_value(&event, b"val") {
+                        if let Some(color) = parse_hex_color(&value) {
+                            current_run_style.text_color = color;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Ok(XmlEvent::Empty(event)) => match local_name(event.name().as_ref()) {
+                b"tab" if current_cell_runs.is_some() => {
+                    if let Some(runs) = current_cell_runs.as_mut() {
+                        append_plain(runs, "\t", current_run_style);
+                    }
+                }
+                b"br" | b"cr" if current_cell_runs.is_some() => {
+                    if let Some(runs) = current_cell_runs.as_mut() {
+                        append_plain(runs, "\n", current_run_style);
+                    }
+                }
+                b"gridCol" => {
+                    if let Some(width) = attr_value(&event, b"w")
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .map(twips_to_points)
+                    {
+                        col_widths_points.push(width.max(18.0));
+                    }
+                }
+                b"trHeight" => {
+                    current_row_height = attr_value(&event, b"val")
+                        .and_then(|value| value.parse::<f32>().ok())
+                        .map(twips_to_points);
+                }
+                b"b" => current_run_style.bold = docx_flag(&event, true),
+                b"i" => current_run_style.italic = docx_flag(&event, true),
+                b"u" => {
+                    current_run_style.underline =
+                        !matches!(attr_value(&event, b"val").as_deref(), Some("none"))
+                }
+                b"sz" => {
+                    if let Some(value) = attr_value(&event, b"val") {
+                        if let Ok(half_points) = value.parse::<f32>() {
+                            current_run_style.font_size_points =
+                                (half_points / 2.0).clamp(8.0, 72.0);
+                        }
+                    }
+                }
+                b"color" => {
+                    if let Some(value) = attr_value(&event, b"val") {
+                        if let Some(color) = parse_hex_color(&value) {
+                            current_run_style.text_color = color;
+                        }
+                    }
+                }
+                b"rFonts" => {
+                    if let Some(font) = resolve_font_from_event_without_theme(&event) {
+                        apply_resolved_font(&mut current_run_style, font);
+                    }
+                }
+                _ => {}
+            },
+            Ok(XmlEvent::Text(text)) => {
+                if current_text {
+                    let decoded = text
+                        .xml_content()
+                        .map_err(|error| format!("failed to decode table text: {error}"))?;
+                    if let Some(runs) = current_cell_runs.as_mut() {
+                        append_plain(runs, decoded.as_ref(), current_run_style);
+                    }
+                }
+            }
+            Ok(XmlEvent::End(event)) => match local_name(event.name().as_ref()) {
+                b"t" => current_text = false,
+                b"tc" => {
+                    let runs = current_cell_runs.take().unwrap_or_default();
+                    let cell = TableCell {
+                        runs: if runs.is_empty() {
+                            vec![TextRun {
+                                text: String::new(),
+                                style: CharacterStyle::default(),
+                            }]
+                        } else {
+                            runs
+                        },
+                        col_span: 1,
+                        row_span: 1,
+                    };
+                    if let Some(row) = current_row.as_mut() {
+                        row.push(cell);
+                    }
+                }
+                b"tr" => {
+                    if let Some(row) = current_row.take() {
+                        rows.push(row);
+                        row_heights_points.push(current_row_height.unwrap_or(20.0).max(12.0));
+                    }
+                }
+                b"tbl" => break,
+                _ => {}
+            },
+            Ok(XmlEvent::Eof) => break,
+            Err(error) => return Err(format!("failed to parse table: {error}")),
+            _ => {}
+        }
+    }
+
+    let num_cols = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    if rows.is_empty() {
+        rows.push((0..num_cols).map(|_| TableCell::new("")).collect());
+        row_heights_points.push(20.0);
+    }
+    for row in &mut rows {
+        while row.len() < num_cols {
+            row.push(TableCell::new(""));
+        }
+    }
+    if col_widths_points.len() < num_cols {
+        let known_width: f32 = col_widths_points.iter().sum();
+        let remaining = (available_width - known_width).max(36.0);
+        let fill = remaining / (num_cols - col_widths_points.len()).max(1) as f32;
+        col_widths_points.resize(num_cols, fill.max(36.0));
+    } else {
+        col_widths_points.truncate(num_cols);
+    }
+    row_heights_points.resize(rows.len(), 20.0);
+
+    Ok(DocumentTable {
+        id: table_id,
+        rows,
+        col_widths_points,
+        row_heights_points,
+        borders: Default::default(),
+    })
+}
+
+fn resolve_font_from_event_without_theme(
+    event: &quick_xml::events::BytesStart<'_>,
+) -> Option<ResolvedFont> {
+    for key in [b"ascii".as_slice(), b"hAnsi", b"cs", b"eastAsia"] {
+        if let Some(value) = attr_value(event, key).filter(|value| !value.trim().is_empty()) {
+            return Some(resolve_font_name(&value));
+        }
+    }
+    None
 }
 
 #[derive(Default)]
@@ -1663,6 +1902,52 @@ mod tests {
         assert_eq!(image.width_points, 72.0);
         assert_eq!(image.height_points, 36.0);
         assert_eq!(image.bytes, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn imports_tables_from_docx_xml() {
+        let numbering = parse_numbering_xml(
+            r#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#,
+        )
+        .unwrap();
+
+        let imported = parse_document_xml(
+            r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:tbl>
+                  <w:tblGrid>
+                    <w:gridCol w:w="1440"/>
+                    <w:gridCol w:w="2880"/>
+                  </w:tblGrid>
+                  <w:tr>
+                    <w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>
+                    <w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc>
+                  </w:tr>
+                  <w:tr>
+                    <w:tc><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc>
+                    <w:tc><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc>
+                  </w:tr>
+                </w:tbl>
+              </w:body>
+            </w:document>
+            "#,
+            &numbering,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(imported.runs[0].text, OBJECT_REPLACEMENT_CHAR.to_string());
+        assert_eq!(imported.paragraph_images, vec![None]);
+        let table = imported.paragraph_tables[0].as_ref().unwrap();
+        assert_eq!(table.num_rows(), 2);
+        assert_eq!(table.num_cols(), 2);
+        assert_eq!(table.col_widths_points, vec![72.0, 144.0]);
+        assert_eq!(table.rows[0][0].plain_text(), "A1");
+        assert_eq!(table.rows[1][1].plain_text(), "B2");
     }
 
     #[test]

@@ -156,6 +156,27 @@ pub struct ImageMoveDrag {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TableResizeKind {
+    Column { left_col: usize },
+    Row { top_row: usize },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TableResizeHandleRect {
+    pub table_id: usize,
+    pub kind: TableResizeKind,
+    pub rect: egui::Rect,
+}
+
+pub struct TableResizeDrag {
+    pub table_id: usize,
+    pub kind: TableResizeKind,
+    pub start_ptr: egui::Pos2,
+    pub first_points: f32,
+    pub second_points: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZoomMode {
     Manual,
     FitPage,
@@ -175,6 +196,10 @@ pub struct CanvasState {
     pub image_rects: Vec<(usize, egui::Rect)>,
     pub resize_drag: Option<ImageResizeDrag>,
     pub move_drag: Option<ImageMoveDrag>,
+    pub active_table_cell: Option<(usize, usize, usize)>,
+    pub table_cell_rects: Vec<(usize, usize, usize, egui::Rect)>,
+    pub table_resize_handles: Vec<TableResizeHandleRect>,
+    pub table_resize_drag: Option<TableResizeDrag>,
 }
 
 impl Default for CanvasState {
@@ -193,6 +218,10 @@ impl Default for CanvasState {
             image_rects: Vec::new(),
             resize_drag: None,
             move_drag: None,
+            active_table_cell: None,
+            table_cell_rects: Vec::new(),
+            table_resize_handles: Vec::new(),
+            table_resize_drag: None,
         }
     }
 }
@@ -597,6 +626,7 @@ impl App for WorsApp {
                     ui,
                     &mut self.active_tab,
                     self.canvas.selected_image_id,
+                    self.canvas.active_table_cell,
                     palette,
                 );
             });
@@ -659,12 +689,19 @@ impl App for WorsApp {
             self.request_grammar_check(false);
         }
 
-        // Auto-switch to Picture contextual tab when an image is selected
-        match (self.canvas.selected_image_id, self.active_tab) {
-            (Some(_), tab) if tab != RibbonTab::Picture => {
+        // Auto-switch to contextual tabs when an object is selected.
+        match (
+            self.canvas.selected_image_id,
+            self.canvas.active_table_cell,
+            self.active_tab,
+        ) {
+            (Some(_), _, tab) if tab != RibbonTab::Picture => {
                 self.active_tab = RibbonTab::Picture;
             }
-            (None, RibbonTab::Picture) => {
+            (None, Some(_), tab) if tab != RibbonTab::Table => {
+                self.active_tab = RibbonTab::Table;
+            }
+            (None, None, RibbonTab::Picture | RibbonTab::Table) => {
                 self.active_tab = RibbonTab::Home;
             }
             _ => {}

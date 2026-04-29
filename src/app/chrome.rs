@@ -10,7 +10,8 @@ use crate::grammar::{GrammarConfig, GrammarStatus, Language};
 
 use super::{
     actions::{
-        insert_image, insert_page_break, open_document, reset_image_size, save_document,
+        delete_table_column, delete_table_row, insert_image, insert_page_break, insert_table,
+        insert_table_column, insert_table_row, open_document, reset_image_size, save_document,
         save_document_as, set_font_choice, set_font_size, set_highlight_color, set_image_opacity,
         set_image_rendering, set_image_wrap_mode, set_paragraph_alignment, set_text_color,
         sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
@@ -29,6 +30,7 @@ pub(super) enum RibbonTab {
     View,
     Grammer,
     Picture,
+    Table,
 }
 
 impl RibbonTab {
@@ -50,6 +52,7 @@ impl RibbonTab {
             Self::View => "View",
             Self::Grammer => "Grammer",
             Self::Picture => "Picture Format",
+            Self::Table => "Table Format",
         }
     }
 }
@@ -146,30 +149,44 @@ pub(super) fn paint_title_bar(
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let close_btn = egui::Button::new(egui::RichText::new("🗙").size(14.0).color(palette.title_fg))
-                        .min_size(egui::vec2(24.0, 24.0))
-                        .fill(egui::Color32::TRANSPARENT)
-                        .stroke(egui::Stroke::NONE);
+                    let close_btn = egui::Button::new(
+                        egui::RichText::new("🗙").size(14.0).color(palette.title_fg),
+                    )
+                    .min_size(egui::vec2(24.0, 24.0))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::NONE);
                     if ui.add(close_btn).on_hover_text("Close").clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
 
                     let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
                     let max_icon = if maximized { "🗗" } else { "🗖" };
-                    let max_btn = egui::Button::new(egui::RichText::new(max_icon).size(14.0).color(palette.title_fg))
-                        .min_size(egui::vec2(24.0, 24.0))
-                        .fill(egui::Color32::TRANSPARENT)
-                        .stroke(egui::Stroke::NONE);
-                    if ui.add(max_btn).on_hover_text(if maximized { "Restore" } else { "Maximize" }).clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    let max_btn = egui::Button::new(
+                        egui::RichText::new(max_icon)
+                            .size(14.0)
+                            .color(palette.title_fg),
+                    )
+                    .min_size(egui::vec2(24.0, 24.0))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::NONE);
+                    if ui
+                        .add(max_btn)
+                        .on_hover_text(if maximized { "Restore" } else { "Maximize" })
+                        .clicked()
+                    {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                     }
 
-                    let min_btn = egui::Button::new(egui::RichText::new("🗕").size(14.0).color(palette.title_fg))
-                        .min_size(egui::vec2(24.0, 24.0))
-                        .fill(egui::Color32::TRANSPARENT)
-                        .stroke(egui::Stroke::NONE);
+                    let min_btn = egui::Button::new(
+                        egui::RichText::new("🗕").size(14.0).color(palette.title_fg),
+                    )
+                    .min_size(egui::vec2(24.0, 24.0))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::NONE);
                     if ui.add(min_btn).on_hover_text("Minimize").clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                     }
 
                     ui.separator();
@@ -202,8 +219,7 @@ pub(super) fn paint_title_bar(
     if is_dragging {
         if let Some(origin) = press_origin {
             if title_rect.contains(origin) && !anything_dragged {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
         }
     }
@@ -227,6 +243,7 @@ pub(super) fn paint_tab_row(
     ui: &mut egui::Ui,
     active_tab: &mut RibbonTab,
     selected_image_id: Option<usize>,
+    active_table_cell: Option<(usize, usize, usize)>,
     palette: ThemePalette,
 ) {
     egui::Frame::new()
@@ -304,6 +321,39 @@ pub(super) fn paint_tab_row(
                     .corner_radius(4.0);
                     if ui.add(button).clicked() {
                         *active_tab = RibbonTab::Picture;
+                    }
+                }
+
+                if active_table_cell.is_some() {
+                    ui.separator();
+                    let selected = *active_tab == RibbonTab::Table;
+                    let table_accent = egui::Color32::from_rgb(38, 120, 96);
+                    let fg = if selected {
+                        egui::Color32::from_rgb(20, 88, 68)
+                    } else {
+                        egui::Color32::from_rgb(210, 244, 234)
+                    };
+                    let bg = if selected {
+                        egui::Color32::from_rgb(219, 247, 239)
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    let button = egui::Button::new(
+                        egui::RichText::new("Table Format")
+                            .size(13.0)
+                            .color(fg)
+                            .strong(),
+                    )
+                    .min_size(egui::vec2(104.0, 28.0))
+                    .fill(bg)
+                    .stroke(if selected {
+                        egui::Stroke::new(1.0, table_accent)
+                    } else {
+                        egui::Stroke::NONE
+                    })
+                    .corner_radius(4.0);
+                    if ui.add(button).clicked() {
+                        *active_tab = RibbonTab::Table;
                     }
                 }
             });
@@ -406,6 +456,9 @@ pub(super) fn paint_ribbon(
                 }
                 RibbonTab::Picture => {
                     ribbon_picture_group(ui, document, canvas, status_message, history, palette);
+                }
+                RibbonTab::Table => {
+                    table_format_group(ui, document, canvas, status_message, history, palette);
                 }
             });
         });
@@ -589,6 +642,64 @@ fn ribbon_insert_group(
         if ui.button("Page Break").clicked() {
             insert_page_break(document, canvas, status_message, history);
         }
+        ui.separator();
+        ui.menu_button("Table", |ui| {
+            ui.label(egui::RichText::new("Insert Table").size(12.0).strong());
+            ui.add_space(4.0);
+            let grid_size = 8;
+            let cell_size = 18.0;
+            let mut hovered_rows = 0usize;
+            let mut hovered_cols = 0usize;
+            for row in 0..grid_size {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+                    for col in 0..grid_size {
+                        let is_selected = row < hovered_rows && col < hovered_cols;
+                        let fill = if is_selected {
+                            palette.accent.gamma_multiply(0.35)
+                        } else {
+                            palette.ribbon_group_bg
+                        };
+                        let stroke = egui::Stroke::new(
+                            1.0,
+                            if is_selected {
+                                palette.accent
+                            } else {
+                                palette.border
+                            },
+                        );
+                        let btn = egui::Button::new("")
+                            .min_size(egui::vec2(cell_size, cell_size))
+                            .fill(fill)
+                            .stroke(stroke)
+                            .corner_radius(2.0);
+                        let resp = ui.add(btn);
+                        if resp.hovered() {
+                            hovered_rows = row + 1;
+                            hovered_cols = col + 1;
+                        }
+                        if resp.clicked() {
+                            insert_table(
+                                document,
+                                canvas,
+                                row + 1,
+                                col + 1,
+                                status_message,
+                                history,
+                            );
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            if hovered_rows > 0 && hovered_cols > 0 {
+                ui.label(
+                    egui::RichText::new(format!("{}×{}", hovered_rows, hovered_cols))
+                        .size(11.0)
+                        .color(palette.text_muted),
+                );
+            }
+        });
     });
 }
 
@@ -800,6 +911,122 @@ fn ribbon_grammer_settings_group(
                 .size(11.0)
                 .color(palette.text_muted),
         );
+    });
+}
+
+fn table_format_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    let Some((table_id, row, col)) = canvas.active_table_cell else {
+        ribbon_info_group(
+            ui,
+            "Table Format",
+            "Click a table cell to select it.",
+            palette,
+        );
+        return;
+    };
+
+    let Some(table) = document.table_by_id(table_id).cloned() else {
+        canvas.active_table_cell = None;
+        return;
+    };
+
+    ribbon_group(ui, "Rows & Columns", palette, |ui| {
+        if ui.button("Row Above").clicked() {
+            insert_table_row(
+                document,
+                table_id,
+                if row == 0 { usize::MAX } else { row - 1 },
+                status_message,
+                history,
+            );
+            canvas.active_table_cell = Some((table_id, row, col));
+        }
+        if ui.button("Row Below").clicked() {
+            insert_table_row(document, table_id, row, status_message, history);
+            canvas.active_table_cell = Some((table_id, row + 1, col));
+        }
+        ui.separator();
+        if ui.button("Column Left").clicked() {
+            insert_table_column(
+                document,
+                table_id,
+                if col == 0 { usize::MAX } else { col - 1 },
+                status_message,
+                history,
+            );
+            canvas.active_table_cell = Some((table_id, row, col));
+        }
+        if ui.button("Column Right").clicked() {
+            insert_table_column(document, table_id, col, status_message, history);
+            canvas.active_table_cell = Some((table_id, row, col + 1));
+        }
+        ui.separator();
+        if ui.button("Delete Row").clicked() {
+            delete_table_row(document, table_id, row, status_message, history);
+            let next_row = row.min(
+                document
+                    .table_by_id(table_id)
+                    .map_or(1, |t| t.num_rows())
+                    .saturating_sub(1),
+            );
+            canvas.active_table_cell = Some((table_id, next_row, col));
+        }
+        if ui.button("Delete Column").clicked() {
+            delete_table_column(document, table_id, col, status_message, history);
+            let next_col = col.min(
+                document
+                    .table_by_id(table_id)
+                    .map_or(1, |t| t.num_cols())
+                    .saturating_sub(1),
+            );
+            canvas.active_table_cell = Some((table_id, row, next_col));
+        }
+    });
+
+    ribbon_group(ui, "Borders", palette, |ui| {
+        let mut width = table.borders.width_points;
+        let resp = ui.add(
+            egui::DragValue::new(&mut width)
+                .speed(0.1)
+                .range(0.0..=8.0)
+                .fixed_decimals(2)
+                .suffix(" pt"),
+        );
+        if resp.changed() {
+            let now = ui.input(|i| i.time);
+            history.checkpoint_coalesced(document, now);
+            document.set_table_border_width(table_id, width);
+            *status_message = format!("Table border: {:.2} pt", width);
+        }
+        let mut color = table.borders.color;
+        if ui.color_edit_button_srgba(&mut color).changed() {
+            let now = ui.input(|i| i.time);
+            history.checkpoint_coalesced(document, now);
+            document.set_table_border_color(table_id, color);
+            *status_message = "Table border color updated".to_owned();
+        }
+    });
+
+    ribbon_group(ui, "Cells", palette, |ui| {
+        if ui.button("Merge Right").clicked() {
+            history.checkpoint(document, ui.input(|i| i.time));
+            if document.merge_table_cell_right(table_id, row, col) {
+                *status_message = "Cells merged".to_owned();
+            }
+        }
+        if ui.button("Split Cell").clicked() {
+            history.checkpoint(document, ui.input(|i| i.time));
+            if document.split_table_cell(table_id, row, col) {
+                *status_message = "Cell split".to_owned();
+            }
+        }
     });
 }
 

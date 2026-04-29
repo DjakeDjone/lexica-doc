@@ -77,6 +77,7 @@ pub(super) fn handle_pointer_interaction(
             } else {
                 canvas.selection = CCursorRange::one(cursor);
             }
+            canvas.active_table_cell = None;
             canvas.selection.h_pos = None;
             canvas.last_interaction_time = ui.input(|i| i.time);
             false
@@ -86,6 +87,7 @@ pub(super) fn handle_pointer_interaction(
 
         if response.dragged() && canvas.resize_drag.is_none() && canvas.move_drag.is_none() {
             canvas.selection.primary = cursor;
+            canvas.active_table_cell = None;
             canvas.selection.h_pos = None;
             canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
             canvas.active_paragraph_style =
@@ -97,6 +99,7 @@ pub(super) fn handle_pointer_interaction(
             } else {
                 canvas.selection = CCursorRange::one(cursor);
             }
+            canvas.active_table_cell = None;
             canvas.selection.h_pos = None;
             canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
             canvas.active_paragraph_style =
@@ -126,13 +129,21 @@ pub(super) fn handle_keyboard_input(
             Event::Text(text) if !text.is_empty() => {
                 let now = ui.input(|i| i.time);
                 history.checkpoint_coalesced(document, now);
-                replace_selection_or_insert(document, canvas, &text);
+                if canvas.active_table_cell.is_some() {
+                    append_to_active_table_cell(document, canvas, &text);
+                } else {
+                    replace_selection_or_insert(document, canvas, &text);
+                }
                 changed = true;
             }
             Event::Paste(text) => {
                 let now = ui.input(|i| i.time);
                 history.checkpoint(document, now);
-                replace_selection_or_insert(document, canvas, &text);
+                if canvas.active_table_cell.is_some() {
+                    append_to_active_table_cell(document, canvas, &text);
+                } else {
+                    replace_selection_or_insert(document, canvas, &text);
+                }
                 changed = true;
             }
             Event::Copy => {
@@ -173,7 +184,9 @@ pub(super) fn handle_keyboard_input(
                     Key::Backspace => {
                         let now = ui.input(|i| i.time);
                         history.checkpoint_coalesced(document, now);
-                        changed |= if modifiers.ctrl {
+                        changed |= if canvas.active_table_cell.is_some() {
+                            delete_from_active_table_cell(document, canvas, true, modifiers.ctrl)
+                        } else if modifiers.ctrl {
                             delete_word_backward(document, canvas)
                         } else {
                             delete_backward(document, canvas)
@@ -182,7 +195,9 @@ pub(super) fn handle_keyboard_input(
                     Key::Delete => {
                         let now = ui.input(|i| i.time);
                         history.checkpoint_coalesced(document, now);
-                        changed |= if modifiers.ctrl {
+                        changed |= if canvas.active_table_cell.is_some() {
+                            delete_from_active_table_cell(document, canvas, false, modifiers.ctrl)
+                        } else if modifiers.ctrl {
                             delete_word_forward(document, canvas)
                         } else {
                             delete_forward(document, canvas)
@@ -191,13 +206,21 @@ pub(super) fn handle_keyboard_input(
                     Key::Enter => {
                         let now = ui.input(|i| i.time);
                         history.checkpoint(document, now);
-                        replace_selection_or_insert(document, canvas, "\n");
+                        if canvas.active_table_cell.is_some() {
+                            append_to_active_table_cell(document, canvas, "\n");
+                        } else {
+                            replace_selection_or_insert(document, canvas, "\n");
+                        }
                         changed = true;
                     }
                     Key::Tab => {
                         let now = ui.input(|i| i.time);
                         history.checkpoint(document, now);
-                        replace_selection_or_insert(document, canvas, "    ");
+                        if canvas.active_table_cell.is_some() {
+                            move_active_table_cell(document, canvas, !modifiers.shift);
+                        } else {
+                            replace_selection_or_insert(document, canvas, "    ");
+                        }
                         changed = true;
                     }
                     Key::ArrowLeft
@@ -207,7 +230,10 @@ pub(super) fn handle_keyboard_input(
                     | Key::Home
                     | Key::End
                     | Key::A => {
-                        if canvas.selection.on_key_press(os, galley, &modifiers, key) {
+                        if canvas.active_table_cell.is_some() {
+                            move_active_table_cell_by_key(document, canvas, key);
+                            canvas.last_interaction_time = ui.input(|i| i.time);
+                        } else if canvas.selection.on_key_press(os, galley, &modifiers, key) {
                             canvas.active_style =
                                 document.typing_style_at(canvas.selection.primary.index);
                             canvas.active_paragraph_style =
@@ -229,6 +255,108 @@ pub(super) fn handle_keyboard_input(
     }
 
     changed
+}
+
+fn append_to_active_table_cell(document: &mut DocumentState, canvas: &mut CanvasState, text: &str) {
+    let Some((table_id, row, col)) = canvas.active_table_cell else {
+        return;
+    };
+    let mut next = document
+        .table_cell_text(table_id, row, col)
+        .unwrap_or_default();
+    next.push_str(text);
+    document.set_table_cell_text(table_id, row, col, &next);
+}
+
+fn delete_from_active_table_cell(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    backward: bool,
+    word: bool,
+) -> bool {
+    let Some((table_id, row, col)) = canvas.active_table_cell else {
+        return false;
+    };
+    let Some(mut text) = document.table_cell_text(table_id, row, col) else {
+        return false;
+    };
+    if text.is_empty() {
+        return false;
+    }
+    if backward {
+        if word {
+            let mut chars: Vec<char> = text.chars().collect();
+            while chars.last().is_some_and(|ch| !is_word_char(*ch)) {
+                chars.pop();
+            }
+            while chars.last().is_some_and(|ch| is_word_char(*ch)) {
+                chars.pop();
+            }
+            text = chars.into_iter().collect();
+        } else {
+            text.pop();
+        }
+    } else if word {
+        let chars: Vec<char> = text.chars().collect();
+        let mut end = 0usize;
+        while end < chars.len() && !is_word_char(chars[end]) {
+            end += 1;
+        }
+        while end < chars.len() && is_word_char(chars[end]) {
+            end += 1;
+        }
+        if end == 0 {
+            end = 1;
+        }
+        text = chars[end.min(chars.len())..].iter().collect();
+    } else {
+        text = text.chars().skip(1).collect();
+    }
+    document.set_table_cell_text(table_id, row, col, &text);
+    true
+}
+
+fn move_active_table_cell(document: &DocumentState, canvas: &mut CanvasState, forward: bool) {
+    let Some((table_id, row, col)) = canvas.active_table_cell else {
+        return;
+    };
+    let Some(table) = document.table_by_id(table_id) else {
+        canvas.active_table_cell = None;
+        return;
+    };
+    let rows = table.num_rows();
+    let cols = table.num_cols();
+    if rows == 0 || cols == 0 {
+        canvas.active_table_cell = None;
+        return;
+    }
+    let linear = row.saturating_mul(cols).saturating_add(col);
+    let next = if forward {
+        (linear + 1).min(rows * cols - 1)
+    } else {
+        linear.saturating_sub(1)
+    };
+    canvas.active_table_cell = Some((table_id, next / cols, next % cols));
+}
+
+fn move_active_table_cell_by_key(document: &DocumentState, canvas: &mut CanvasState, key: Key) {
+    let Some((table_id, mut row, mut col)) = canvas.active_table_cell else {
+        return;
+    };
+    let Some(table) = document.table_by_id(table_id) else {
+        canvas.active_table_cell = None;
+        return;
+    };
+    match key {
+        Key::ArrowLeft => col = col.saturating_sub(1),
+        Key::ArrowRight => col = (col + 1).min(table.num_cols().saturating_sub(1)),
+        Key::ArrowUp => row = row.saturating_sub(1),
+        Key::ArrowDown => row = (row + 1).min(table.num_rows().saturating_sub(1)),
+        Key::Home => col = 0,
+        Key::End => col = table.num_cols().saturating_sub(1),
+        _ => {}
+    }
+    canvas.active_table_cell = Some((table_id, row, col));
 }
 
 fn handle_shortcut_key(

@@ -43,6 +43,10 @@ pub(super) fn open_document(
                 canvas.image_rects.clear();
                 canvas.resize_drag = None;
                 canvas.move_drag = None;
+                canvas.active_table_cell = None;
+                canvas.table_cell_rects.clear();
+                canvas.table_resize_handles.clear();
+                canvas.table_resize_drag = None;
                 *current_path = match path.extension().and_then(|ext| ext.to_str()) {
                     Some("docx") => None,
                     _ => Some(path.clone()),
@@ -177,8 +181,10 @@ pub(super) fn insert_image(
     canvas.active_style = document.typing_style_at(cursor_index);
     canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
     canvas.selected_image_id = Some(image_id);
+    canvas.active_table_cell = None;
     canvas.resize_drag = None;
     canvas.move_drag = None;
+    canvas.table_resize_drag = None;
     canvas.image_textures.clear();
     *status_message = format!(
         "Inserted {}",
@@ -525,4 +531,90 @@ fn apply_selection_or_current_paragraph(
     let range = canvas.selection.as_sorted_char_range();
     document.apply_paragraph_style_to_range(range, mutate);
     canvas.active_paragraph_style = document.paragraph_style_at(canvas.selection.primary.index);
+}
+
+pub(super) fn insert_table(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    num_rows: usize,
+    num_cols: usize,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+) {
+    history.checkpoint(document, f64::NAN);
+    let selected = canvas.selection.as_sorted_char_range();
+    let insert_at = selected.start;
+    if selected.start < selected.end {
+        document.delete_range(selected);
+    }
+
+    let cursor_index = document.insert_table(insert_at, num_rows, num_cols);
+    canvas.selection = egui::text_selection::CCursorRange::one(
+        egui::epaint::text::cursor::CCursor::new(cursor_index),
+    );
+    if let Some(table_id) = document
+        .paragraph_tables
+        .iter()
+        .flatten()
+        .map(|table| table.id)
+        .max()
+    {
+        canvas.active_table_cell = Some((table_id, 0, 0));
+    }
+    canvas.selected_image_id = None;
+    canvas.active_style = document.typing_style_at(cursor_index);
+    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+    *status_message = format!("Inserted {}×{} table", num_rows, num_cols);
+}
+
+#[allow(dead_code)]
+pub(super) fn insert_table_row(
+    document: &mut DocumentState,
+    table_id: usize,
+    after_row: usize,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+) {
+    history.checkpoint(document, f64::NAN);
+    document.insert_table_row(table_id, after_row);
+    *status_message = "Row inserted".to_owned();
+}
+
+#[allow(dead_code)]
+pub(super) fn insert_table_column(
+    document: &mut DocumentState,
+    table_id: usize,
+    after_col: usize,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+) {
+    history.checkpoint(document, f64::NAN);
+    document.insert_table_column(table_id, after_col);
+    *status_message = "Column inserted".to_owned();
+}
+
+#[allow(dead_code)]
+pub(super) fn delete_table_row(
+    document: &mut DocumentState,
+    table_id: usize,
+    row_index: usize,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+) {
+    history.checkpoint(document, f64::NAN);
+    document.delete_table_row(table_id, row_index);
+    *status_message = "Row deleted".to_owned();
+}
+
+#[allow(dead_code)]
+pub(super) fn delete_table_column(
+    document: &mut DocumentState,
+    table_id: usize,
+    col_index: usize,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+) {
+    history.checkpoint(document, f64::NAN);
+    document.delete_table_column(table_id, col_index);
+    *status_message = "Column deleted".to_owned();
 }
