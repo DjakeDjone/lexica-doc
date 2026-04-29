@@ -5,6 +5,8 @@ use eframe::egui;
 use rfd::FileDialog;
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::{JsCast as _, JsValue};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::document::DocumentImage;
@@ -85,8 +87,11 @@ pub(super) fn save_document(
 ) {
     #[cfg(target_arch = "wasm32")]
     {
-        *status_message = "Saving local files is not available in the web build yet".to_owned();
-        let _ = (document, current_path);
+        match download_document(document) {
+            Ok(filename) => *status_message = format!("Downloaded {filename}"),
+            Err(error) => *status_message = error,
+        }
+        let _ = current_path;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -121,8 +126,11 @@ pub(super) fn save_document_as(
 ) {
     #[cfg(target_arch = "wasm32")]
     {
-        *status_message = "Save As is not available in the web build yet".to_owned();
-        let _ = (document, current_path);
+        match download_document(document) {
+            Ok(filename) => *status_message = format!("Downloaded {filename}"),
+            Err(error) => *status_message = error,
+        }
+        let _ = current_path;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -155,6 +163,81 @@ fn pick_save_path(document: &DocumentState) -> Option<PathBuf> {
         .add_filter("pdf", &["pdf"])
         .set_file_name(&document.title)
         .save_file()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn download_document(document: &DocumentState) -> Result<String, String> {
+    let filename = download_filename(&document.title, "html");
+    let bytes = document.export_bytes_for_extension("html")?;
+    download_bytes(&filename, "text/html;charset=utf-8", &bytes)?;
+    Ok(filename)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn download_filename(title: &str, extension: &str) -> String {
+    let mut stem: String = title
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ' ') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    stem = stem.trim().replace(' ', "-");
+    while stem.contains("--") {
+        stem = stem.replace("--", "-");
+    }
+    let stem = stem.trim_matches('-');
+    let stem = if stem.is_empty() { "document" } else { stem };
+    format!("{stem}.{extension}")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn download_bytes(filename: &str, mime_type: &str, bytes: &[u8]) -> Result<(), String> {
+    let window = web_sys::window().ok_or_else(|| "Browser window is unavailable".to_owned())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "Browser document is unavailable".to_owned())?;
+    let body = document
+        .body()
+        .ok_or_else(|| "Browser document body is unavailable".to_owned())?;
+
+    let byte_array = js_sys::Uint8Array::from(bytes);
+    let blob_parts = js_sys::Array::new();
+    blob_parts.push(&byte_array.buffer());
+
+    let blob_options = web_sys::BlobPropertyBag::new();
+    blob_options.set_type(mime_type);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&blob_parts, &blob_options)
+        .map_err(js_error_message)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(js_error_message)?;
+
+    let anchor = document
+        .create_element("a")
+        .map_err(js_error_message)?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "Failed to create download link".to_owned())?;
+    anchor.set_href(&url);
+    anchor.set_download(filename);
+    anchor
+        .style()
+        .set_property("display", "none")
+        .map_err(js_error_message)?;
+
+    body.append_child(&anchor).map_err(js_error_message)?;
+    anchor.click();
+    anchor.remove();
+    web_sys::Url::revoke_object_url(&url).map_err(js_error_message)?;
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_error_message(value: JsValue) -> String {
+    value
+        .as_string()
+        .unwrap_or_else(|| "Browser download failed".to_owned())
 }
 
 pub(super) fn insert_page_break(

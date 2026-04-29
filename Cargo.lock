@@ -5200,6 +5200,7 @@ dependencies = [
  "egui",
  "image",
  "insta",
+ "js-sys",
  "log",
  "printpdf",
  "pulldown-cmark",

@@ -1207,16 +1207,22 @@ impl DocumentState {
             .and_then(|ext| ext.to_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
+        let bytes = self.export_bytes_for_extension(&extension)?;
 
-        match extension.as_str() {
-            "md" | "markdown" => fs::write(path, self.to_markdown())
-                .map_err(|error| format!("failed to save {}: {error}", path.display())),
-            "txt" | "" => fs::write(path, self.to_plain_text_export())
-                .map_err(|error| format!("failed to save {}: {error}", path.display())),
-            "html" | "htm" => fs::write(path, self.to_html())
-                .map_err(|error| format!("failed to save {}: {error}", path.display())),
-            "pdf" => fs::write(path, self.to_pdf_bytes()?)
-                .map_err(|error| format!("failed to save {}: {error}", path.display())),
+        fs::write(path, bytes)
+            .map_err(|error| format!("failed to save {}: {error}", path.display()))
+    }
+
+    pub fn export_bytes_for_extension(&self, extension: &str) -> Result<Vec<u8>, String> {
+        match extension
+            .trim_start_matches('.')
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "md" | "markdown" => Ok(self.to_markdown().into_bytes()),
+            "txt" | "" => Ok(self.to_plain_text_export().into_bytes()),
+            "html" | "htm" => Ok(self.to_html().into_bytes()),
+            "pdf" => self.to_pdf_bytes(),
             other => Err(format!(
                 "saving .{other} is not supported yet; use .txt, .md, .html, or .pdf"
             )),
