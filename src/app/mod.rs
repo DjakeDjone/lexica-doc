@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::process::Child;
+#[cfg(not(target_arch = "wasm32"))]
+use std::{env, fs};
 
 use eframe::{egui, App, CreationContext, Frame};
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,6 +28,8 @@ use crate::{
     grammar::{GrammarConfig, GrammarError, GrammarStatus},
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use actions::open_document_from_path;
 use actions::{handle_global_shortcuts, open_document, save_document, save_document_as_with_name};
 use chrome::{
     paint_backstage, paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar,
@@ -44,6 +48,8 @@ const DOCX_LIBERATION_MONO: &str = "docx-liberation-mono";
 const DOCX_COMIC_SANS: &str = "docx-comic-sans";
 #[cfg(not(target_arch = "wasm32"))]
 const GRAMMAR_QUEUE_CAPACITY: usize = 8;
+#[cfg(not(target_arch = "wasm32"))]
+const RECENT_FILES_LIMIT: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GrammarDownloadStatus {
@@ -57,6 +63,102 @@ enum GrammarDownloadResult {
     Ready(PathBuf),
     Failed(String),
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_files_path() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|path| path.join("wors").join("recent-files.json"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        env::var_os("HOME").map(PathBuf::from).map(|path| {
+            path.join("Library")
+                .join("Application Support")
+                .join("wors")
+                .join("recent-files.json")
+        })
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        if let Some(config_home) = env::var_os("XDG_CONFIG_HOME") {
+            Some(
+                PathBuf::from(config_home)
+                    .join("wors")
+                    .join("recent-files.json"),
+            )
+        } else {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|path| path.join(".config").join("wors").join("recent-files.json"))
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn normalize_recent_path(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn normalize_recent_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_recent_files() -> Vec<PathBuf> {
+    let Some(path) = recent_files_path() else {
+        return Vec::new();
+    };
+    let Ok(source) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(raw_paths) = serde_json::from_str::<Vec<String>>(&source) else {
+        return Vec::new();
+    };
+    let mut recent_files = Vec::new();
+    for raw_path in raw_paths {
+        let path = normalize_recent_path(PathBuf::from(raw_path));
+        if path.exists() && !recent_files.contains(&path) {
+            recent_files.push(path);
+        }
+        if recent_files.len() >= RECENT_FILES_LIMIT {
+            break;
+        }
+    }
+    recent_files
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_recent_files() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn save_recent_files(recent_files: &[PathBuf]) {
+    let Some(path) = recent_files_path() else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let raw_paths: Vec<String> = recent_files
+        .iter()
+        .filter(|path| path.exists())
+        .map(|path| path.display().to_string())
+        .collect();
+    if let Ok(json) = serde_json::to_string_pretty(&raw_paths) {
+        let _ = fs::write(path, json);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_recent_files(_recent_files: &[PathBuf]) {}
 
 pub struct ChangeHistory {
     undo_stack: Vec<DocumentState>,
@@ -256,6 +358,7 @@ pub struct WorsApp {
     backstage: BackstageState,
     status_message: String,
     current_path: Option<PathBuf>,
+    recent_files: Vec<PathBuf>,
     logo_texture: egui::TextureHandle,
     grammar_config: GrammarConfig,
     grammar_errors: Vec<GrammarError>,
@@ -343,6 +446,7 @@ impl WorsApp {
             backstage: BackstageState::default(),
             status_message: "Ready".to_owned(),
             current_path: None,
+            recent_files: load_recent_files(),
             logo_texture,
             grammar_config,
             grammar_errors: Vec::new(),
@@ -371,6 +475,20 @@ impl WorsApp {
         }
 
         app
+    }
+
+    fn remember_recent_file(&mut self, path: PathBuf) {
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let path = normalize_recent_path(path);
+        if self.recent_files.first() == Some(&path) {
+            return;
+        }
+        self.recent_files.retain(|recent| recent != &path);
+        self.recent_files.insert(0, path.clone());
+        self.recent_files.truncate(12);
+        save_recent_files(&self.recent_files);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -738,6 +856,7 @@ impl App for WorsApp {
                         &mut self.backstage,
                         &self.document,
                         &self.current_path,
+                        &self.recent_files,
                         palette,
                     );
                 });
@@ -746,31 +865,61 @@ impl App for WorsApp {
                 self.backstage.visible = false;
             }
             if backstage_output.save_requested {
-                save_document(
+                if let Some(path) = save_document(
                     &self.document,
                     &mut self.status_message,
                     &mut self.current_path,
-                );
+                ) {
+                    self.remember_recent_file(path);
+                }
             }
             if backstage_output.save_as_requested {
-                save_document_as_with_name(
+                if let Some(path) = save_document_as_with_name(
                     &self.document,
                     &mut self.status_message,
                     &mut self.current_path,
                     &self.backstage.file_name,
                     self.backstage.format.extension(),
-                );
+                ) {
+                    self.remember_recent_file(path);
+                }
             }
             if backstage_output.open_requested {
-                open_document(
+                if let Some(path) = open_document(
                     &mut self.document,
                     &mut self.canvas,
                     &mut self.status_message,
                     &mut self.current_path,
                     &mut self.history,
-                );
+                ) {
+                    self.remember_recent_file(path);
+                }
                 self.backstage
                     .open_save_as(&self.document, &self.current_path);
+            }
+            if let Some(path) = backstage_output.recent_open_requested {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if open_document_from_path(
+                        &mut self.document,
+                        &mut self.canvas,
+                        &mut self.status_message,
+                        &mut self.current_path,
+                        &mut self.history,
+                        &path,
+                    ) {
+                        self.remember_recent_file(path);
+                        self.backstage
+                            .open_save_as(&self.document, &self.current_path);
+                        self.backstage.visible = false;
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = path;
+                    self.status_message =
+                        "Opening recent files is not available in the web build yet".to_owned();
+                }
             }
         } else {
             egui::Panel::top("ribbon")
@@ -828,6 +977,10 @@ impl App for WorsApp {
         }
         if shortcut_changed || canvas_output.text_changed {
             self.request_grammar_check(false);
+        }
+
+        if let Some(path) = self.current_path.clone() {
+            self.remember_recent_file(path);
         }
 
         // Auto-switch to contextual tabs when an object is selected.

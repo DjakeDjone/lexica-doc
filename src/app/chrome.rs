@@ -199,6 +199,7 @@ pub(super) struct BackstageOutput {
     pub open_requested: bool,
     pub save_requested: bool,
     pub save_as_requested: bool,
+    pub recent_open_requested: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -630,6 +631,7 @@ pub(super) fn paint_backstage(
     state: &mut BackstageState,
     document: &DocumentState,
     current_path: &Option<PathBuf>,
+    recent_files: &[PathBuf],
     palette: ThemePalette,
 ) -> BackstageOutput {
     let mut output = BackstageOutput::default();
@@ -665,6 +667,7 @@ pub(super) fn paint_backstage(
             state,
             document,
             current_path,
+            recent_files,
             &mut output,
             detail_width,
             height,
@@ -717,7 +720,9 @@ fn paint_backstage_nav(
                     if response.clicked() {
                         match section {
                             BackstageSection::Save => output.save_requested = true,
-                            BackstageSection::Open => output.open_requested = true,
+                            BackstageSection::Open => {
+                                state.section = BackstageSection::Open;
+                            }
                             BackstageSection::SaveAs => {
                                 state.section = BackstageSection::SaveAs;
                             }
@@ -745,6 +750,11 @@ fn paint_backstage_locations(
         .show(ui, |ui| {
             ui.set_width(width);
             ui.set_min_height(height);
+            if state.section == BackstageSection::Open {
+                paint_backstage_open_locations(ui, output, width, palette);
+                return;
+            }
+
             ui.heading(
                 egui::RichText::new("Save As")
                     .size(28.0)
@@ -789,12 +799,49 @@ fn paint_backstage_locations(
         });
 }
 
+fn paint_backstage_open_locations(
+    ui: &mut egui::Ui,
+    output: &mut BackstageOutput,
+    width: f32,
+    palette: ThemePalette,
+) {
+    ui.heading(
+        egui::RichText::new("Open")
+            .size(28.0)
+            .color(palette.text_primary),
+    );
+    ui.add_space(20.0);
+    let _ = backstage_two_line_row(
+        ui,
+        "Recent",
+        "Recently opened and saved files",
+        true,
+        true,
+        palette,
+    );
+    ui.add_space(4.0);
+    if backstage_two_line_row(
+        ui,
+        "Browse",
+        "Open the system file dialog",
+        false,
+        true,
+        palette,
+    )
+    .clicked()
+    {
+        output.open_requested = true;
+    }
+    let _ = width;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_backstage_details(
     ui: &mut egui::Ui,
     state: &mut BackstageState,
     document: &DocumentState,
     current_path: &Option<PathBuf>,
+    recent_files: &[PathBuf],
     output: &mut BackstageOutput,
     width: f32,
     height: f32,
@@ -816,6 +863,17 @@ fn paint_backstage_details(
                             current_dir_label(&state.local_dir)
                         }
                     };
+                    if state.section == BackstageSection::Open {
+                        ui.label(
+                            egui::RichText::new("Recent files")
+                                .size(14.0)
+                                .strong()
+                                .color(palette.text_primary),
+                        );
+                        ui.add_space(18.0);
+                        paint_recent_files(ui, recent_files, output, width - 52.0, palette);
+                        return;
+                    }
 
                     ui.label(
                         egui::RichText::new(breadcrumb)
@@ -983,6 +1041,45 @@ fn paint_folder_contents(
     }
 }
 
+fn paint_recent_files(
+    ui: &mut egui::Ui,
+    recent_files: &[PathBuf],
+    output: &mut BackstageOutput,
+    width: f32,
+    palette: ThemePalette,
+) {
+    folder_header(ui, width, palette);
+    if recent_files.is_empty() {
+        ui.add_space(12.0);
+        ui.label(
+            egui::RichText::new("No recent files yet")
+                .size(12.0)
+                .color(palette.text_muted),
+        );
+        return;
+    }
+
+    let width = width.min(ui.available_width()).max(360.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .max_height((ui.available_height() - 8.0).max(120.0))
+        .show(ui, |ui| {
+            for path in recent_files {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("document");
+                let detail = path.parent().map_or_else(
+                    || path.display().to_string(),
+                    |parent| parent.display().to_string(),
+                );
+                if recent_file_row(ui, name, &detail, width, palette).clicked() {
+                    output.recent_open_requested = Some(path.clone());
+                }
+            }
+        });
+}
+
 fn backstage_nav_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -1128,6 +1225,45 @@ fn location_subtitle(location: BackstageLocation, local_dir: &Option<PathBuf>) -
     }
 }
 
+fn recent_file_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    detail: &str,
+    width: f32,
+    palette: ThemePalette,
+) -> egui::Response {
+    let width = width.min(ui.available_width()).max(360.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 42.0), egui::Sense::click());
+    let fill = if response.hovered() {
+        palette.accent.gamma_multiply(0.08)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 0.0, fill);
+
+    let icon_rect = egui::Rect::from_min_size(
+        rect.left_center() + egui::vec2(10.0, -7.0),
+        egui::vec2(16.0, 14.0),
+    );
+    paint_file_icon(ui.painter(), icon_rect, palette);
+
+    ui.painter().text(
+        rect.left_top() + egui::vec2(34.0, 7.0),
+        egui::Align2::LEFT_TOP,
+        name,
+        egui::FontId::proportional(12.5),
+        palette.text_primary,
+    );
+    ui.painter().text(
+        rect.left_top() + egui::vec2(34.0, 24.0),
+        egui::Align2::LEFT_TOP,
+        detail,
+        egui::FontId::proportional(10.5),
+        palette.text_muted,
+    );
+    response
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn folder_row(
     ui: &mut egui::Ui,
@@ -1210,7 +1346,6 @@ fn paint_folder_icon(painter: &egui::Painter, rect: egui::Rect, palette: ThemePa
     painter.rect_stroke(body, 1.0, stroke, egui::StrokeKind::Inside);
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn paint_file_icon(painter: &egui::Painter, rect: egui::Rect, palette: ThemePalette) {
     let stroke = egui::Stroke::new(1.2, palette.text_muted);
     let page = egui::Rect::from_min_max(
@@ -1433,13 +1568,13 @@ fn ribbon_file_group(
 ) {
     ribbon_group(ui, "Clipboard", palette, |ui| {
         if ui.button("📂 Open").clicked() {
-            open_document(document, canvas, status_message, current_path, history);
+            let _ = open_document(document, canvas, status_message, current_path, history);
         }
         if ui.button("💾 Save").clicked() {
-            save_document(document, status_message, current_path);
+            let _ = save_document(document, status_message, current_path);
         }
         if ui.button("Save As").clicked() {
-            save_document_as(document, status_message, current_path);
+            let _ = save_document_as(document, status_message, current_path);
         }
     });
 }

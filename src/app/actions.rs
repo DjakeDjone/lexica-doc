@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -24,58 +26,86 @@ pub(super) fn open_document(
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
     history: &mut ChangeHistory,
-) {
+) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
         *status_message = "Opening local files is not available in the web build yet".to_owned();
         let _ = (document, canvas, current_path, history);
+        None
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) = FileDialog::new()
-        .add_filter("supported", &["txt", "md", "markdown", "docx"])
-        .pick_file()
     {
-        match DocumentState::load_from_path(&path) {
-            Ok(new_document) => {
-                let imported_docx =
-                    matches!(path.extension().and_then(|ext| ext.to_str()), Some("docx"));
-                history.clear();
-                *document = new_document;
-                canvas.selection = egui::text_selection::CCursorRange::default();
-                canvas.active_style = CharacterStyle::default();
-                canvas.active_paragraph_style = ParagraphStyle::default();
-                canvas.zoom = 1.0;
-                canvas.zoom_mode = if imported_docx {
-                    ZoomMode::FitPage
-                } else {
-                    ZoomMode::Manual
-                };
-                canvas.imported_docx_view = imported_docx;
-                canvas.pan = egui::Vec2::ZERO;
-                canvas.image_textures.clear();
-                canvas.selected_image_id = None;
-                canvas.image_rects.clear();
-                canvas.resize_drag = None;
-                canvas.move_drag = None;
-                canvas.active_table_cell = None;
-                canvas.table_cell_rects.clear();
-                canvas.table_cell_content_rects.clear();
-                canvas.table_cell_selection = egui::text_selection::CCursorRange::default();
-                canvas.table_resize_handles.clear();
-                canvas.table_resize_drag = None;
-                *current_path = match path.extension().and_then(|ext| ext.to_str()) {
-                    Some("docx") => None,
-                    _ => Some(path.clone()),
-                };
-                *status_message = format!(
-                    "Imported {}",
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("document")
-                );
-            }
-            Err(error) => *status_message = error,
+        let Some(path) = FileDialog::new()
+            .add_filter("supported", &["txt", "md", "markdown", "docx"])
+            .pick_file()
+        else {
+            return None;
+        };
+        open_document_from_path(
+            document,
+            canvas,
+            status_message,
+            current_path,
+            history,
+            &path,
+        )
+        .then_some(path)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn open_document_from_path(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    current_path: &mut Option<PathBuf>,
+    history: &mut ChangeHistory,
+    path: &Path,
+) -> bool {
+    match DocumentState::load_from_path(path) {
+        Ok(new_document) => {
+            let imported_docx =
+                matches!(path.extension().and_then(|ext| ext.to_str()), Some("docx"));
+            history.clear();
+            *document = new_document;
+            canvas.selection = egui::text_selection::CCursorRange::default();
+            canvas.active_style = CharacterStyle::default();
+            canvas.active_paragraph_style = ParagraphStyle::default();
+            canvas.zoom = 1.0;
+            canvas.zoom_mode = if imported_docx {
+                ZoomMode::FitPage
+            } else {
+                ZoomMode::Manual
+            };
+            canvas.imported_docx_view = imported_docx;
+            canvas.pan = egui::Vec2::ZERO;
+            canvas.image_textures.clear();
+            canvas.selected_image_id = None;
+            canvas.image_rects.clear();
+            canvas.resize_drag = None;
+            canvas.move_drag = None;
+            canvas.active_table_cell = None;
+            canvas.table_cell_rects.clear();
+            canvas.table_cell_content_rects.clear();
+            canvas.table_cell_selection = egui::text_selection::CCursorRange::default();
+            canvas.table_resize_handles.clear();
+            canvas.table_resize_drag = None;
+            *current_path = match path.extension().and_then(|ext| ext.to_str()) {
+                Some("docx") => None,
+                _ => Some(path.to_path_buf()),
+            };
+            *status_message = format!(
+                "Imported {}",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("document")
+            );
+            true
+        }
+        Err(error) => {
+            *status_message = error;
+            false
         }
     }
 }
@@ -84,7 +114,7 @@ pub(super) fn save_document(
     document: &DocumentState,
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
-) {
+) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
         match download_document(document) {
@@ -92,6 +122,7 @@ pub(super) fn save_document(
             Err(error) => *status_message = error,
         }
         let _ = current_path;
+        None
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -100,7 +131,7 @@ pub(super) fn save_document(
             Some(path) => path,
             None => match pick_save_path(document) {
                 Some(path) => path,
-                None => return,
+                None => return None,
             },
         };
 
@@ -113,8 +144,12 @@ pub(super) fn save_document(
                         .and_then(|name| name.to_str())
                         .unwrap_or("document")
                 );
+                Some(path)
             }
-            Err(error) => *status_message = error,
+            Err(error) => {
+                *status_message = error;
+                None
+            }
         }
     }
 }
@@ -123,7 +158,7 @@ pub(super) fn save_document_as(
     document: &DocumentState,
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
-) {
+) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
         match download_document(document) {
@@ -131,12 +166,13 @@ pub(super) fn save_document_as(
             Err(error) => *status_message = error,
         }
         let _ = current_path;
+        None
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
         let Some(path) = pick_save_path(document) else {
-            return;
+            return None;
         };
 
         match document.save_to_path(&path) {
@@ -148,8 +184,12 @@ pub(super) fn save_document_as(
                         .and_then(|name| name.to_str())
                         .unwrap_or("document")
                 );
+                Some(path)
             }
-            Err(error) => *status_message = error,
+            Err(error) => {
+                *status_message = error;
+                None
+            }
         }
     }
 }
@@ -160,7 +200,7 @@ pub(super) fn save_document_as_with_name(
     current_path: &mut Option<PathBuf>,
     file_name: &str,
     extension: &str,
-) {
+) -> Option<PathBuf> {
     let suggested_name = suggested_save_name(file_name, extension);
 
     #[cfg(target_arch = "wasm32")]
@@ -170,12 +210,13 @@ pub(super) fn save_document_as_with_name(
             Err(error) => *status_message = error,
         }
         let _ = current_path;
+        None
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
         let Some(path) = pick_save_path_with_file_name(&suggested_name) else {
-            return;
+            return None;
         };
 
         match document.save_to_path(&path) {
@@ -187,8 +228,12 @@ pub(super) fn save_document_as_with_name(
                         .and_then(|name| name.to_str())
                         .unwrap_or("document")
                 );
+                Some(path)
             }
-            Err(error) => *status_message = error,
+            Err(error) => {
+                *status_message = error;
+                None
+            }
         }
     }
 }
@@ -430,7 +475,7 @@ pub(super) fn handle_global_shortcuts(
     let mut document_changed = false;
 
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
-        save_document(document, status_message, current_path);
+        let _ = save_document(document, status_message, current_path);
     }
     if ui.input_mut(|input| {
         input.consume_key(
@@ -438,7 +483,7 @@ pub(super) fn handle_global_shortcuts(
             egui::Key::S,
         )
     }) {
-        save_document_as(document, status_message, current_path);
+        let _ = save_document_as(document, status_message, current_path);
     }
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
         if ui.input(|i| i.modifiers.shift) {
