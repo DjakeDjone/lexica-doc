@@ -66,5 +66,11 @@ pub async fn start() -> Result<(), wasm_bindgen::JsValue> {
             eframe::WebOptions::default(),
             Box::new(|cc| Ok(Box::new(WorsApp::new(cc)))),
         )
-        .await
+        .await?;
+
+    if let Some(loader) = document.get_element_by_id("editor-loader") {
+        loader.set_attribute("hidden", "")?;
+    }
+
+    Ok(())
 }
