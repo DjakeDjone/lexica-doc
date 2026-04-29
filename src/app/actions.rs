@@ -537,7 +537,8 @@ pub(super) fn set_font_choice(
 ) {
     history.checkpoint(document, f64::NAN);
     apply_selection_or_active_style(document, canvas, move |style| {
-        style.font_choice = font_choice
+        style.font_choice = font_choice;
+        style.font_family_name = font_choice.family_name();
     });
 }
 

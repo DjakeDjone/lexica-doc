@@ -596,13 +596,14 @@ fn ribbon_font_group(
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Font", palette, |ui| {
+        let active_font = FontChoice::from_style(canvas.active_style);
         egui::ComboBox::from_id_salt("font_choice")
-            .selected_text(canvas.active_style.font_choice.label())
-            .width(130.0)
+            .selected_text(active_font.label())
+            .width(160.0)
             .show_ui(ui, |ui| {
                 for font in FontChoice::ALL {
                     if ui
-                        .selectable_label(canvas.active_style.font_choice == font, font.label())
+                        .selectable_label(active_font == font, font.label())
                         .clicked()
                     {
                         set_font_choice(document, canvas, font, history);

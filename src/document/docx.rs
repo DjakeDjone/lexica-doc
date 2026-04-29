@@ -20,6 +20,7 @@ const DOCX_CALADEA: &str = "docx-caladea";
 const DOCX_LIBERATION_SANS: &str = "docx-liberation-sans";
 const DOCX_LIBERATION_SERIF: &str = "docx-liberation-serif";
 const DOCX_LIBERATION_MONO: &str = "docx-liberation-mono";
+const DOCX_COMIC_SANS: &str = "docx-comic-sans";
 
 #[derive(Debug, Serialize)]
 pub struct ImportedDocx {
@@ -1049,6 +1050,7 @@ fn resolve_font_name(name: &str) -> ResolvedFont {
         "arial" => Some(DOCX_LIBERATION_SANS),
         "times new roman" => Some(DOCX_LIBERATION_SERIF),
         "courier new" | "consolas" => Some(DOCX_LIBERATION_MONO),
+        "comic sans" | "comic sans ms" | "comic neue" => Some(DOCX_COMIC_SANS),
         _ => None,
     };
 

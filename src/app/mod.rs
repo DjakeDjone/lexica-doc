@@ -38,6 +38,7 @@ const DOCX_CALADEA: &str = "docx-caladea";
 const DOCX_LIBERATION_SANS: &str = "docx-liberation-sans";
 const DOCX_LIBERATION_SERIF: &str = "docx-liberation-serif";
 const DOCX_LIBERATION_MONO: &str = "docx-liberation-mono";
+const DOCX_COMIC_SANS: &str = "docx-comic-sans";
 #[cfg(not(target_arch = "wasm32"))]
 const GRAMMAR_QUEUE_CAPACITY: usize = 8;
 
@@ -639,6 +640,11 @@ fn configure_docx_fonts(ctx: &egui::Context) {
         &mut fonts,
         DOCX_LIBERATION_MONO,
         include_bytes!("../../assets/fonts/LiberationMono-Regular.ttf"),
+    );
+    register_font(
+        &mut fonts,
+        DOCX_COMIC_SANS,
+        include_bytes!("../../assets/fonts/ComicNeue-Regular.ttf"),
     );
     ctx.set_fonts(fonts);
 }

@@ -25,23 +25,85 @@ pub const OBJECT_REPLACEMENT_CHAR: char = '\u{fffc}';
 pub enum FontChoice {
     Proportional,
     Monospace,
+    Carlito,
+    Caladea,
+    LiberationSans,
+    LiberationSerif,
+    LiberationMono,
+    ComicSans,
 }
 
 impl FontChoice {
-    pub const ALL: [Self; 2] = [Self::Proportional, Self::Monospace];
+    pub const ALL: [Self; 8] = [
+        Self::Proportional,
+        Self::Carlito,
+        Self::Caladea,
+        Self::LiberationSans,
+        Self::LiberationSerif,
+        Self::ComicSans,
+        Self::Monospace,
+        Self::LiberationMono,
+    ];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Proportional => "Body",
             Self::Monospace => "Monospace",
+            Self::Carlito => "Carlito",
+            Self::Caladea => "Caladea",
+            Self::LiberationSans => "Liberation Sans",
+            Self::LiberationSerif => "Liberation Serif",
+            Self::LiberationMono => "Liberation Mono",
+            Self::ComicSans => "Comic Sans",
         }
     }
 
-    pub const fn family(self) -> FontFamily {
+    pub fn family(self) -> FontFamily {
         match self {
             Self::Proportional => FontFamily::Proportional,
             Self::Monospace => FontFamily::Monospace,
+            Self::Carlito => FontFamily::Name("docx-carlito".into()),
+            Self::Caladea => FontFamily::Name("docx-caladea".into()),
+            Self::LiberationSans => FontFamily::Name("docx-liberation-sans".into()),
+            Self::LiberationSerif => FontFamily::Name("docx-liberation-serif".into()),
+            Self::LiberationMono => FontFamily::Name("docx-liberation-mono".into()),
+            Self::ComicSans => FontFamily::Name("docx-comic-sans".into()),
         }
+    }
+
+    pub const fn family_name(self) -> Option<&'static str> {
+        match self {
+            Self::Proportional | Self::Monospace => None,
+            Self::Carlito => Some("docx-carlito"),
+            Self::Caladea => Some("docx-caladea"),
+            Self::LiberationSans => Some("docx-liberation-sans"),
+            Self::LiberationSerif => Some("docx-liberation-serif"),
+            Self::LiberationMono => Some("docx-liberation-mono"),
+            Self::ComicSans => Some("docx-comic-sans"),
+        }
+    }
+
+    pub const fn is_monospace(self) -> bool {
+        matches!(self, Self::Monospace | Self::LiberationMono)
+    }
+
+    pub fn from_family_name(name: &'static str) -> Option<Self> {
+        match name {
+            "docx-carlito" => Some(Self::Carlito),
+            "docx-caladea" => Some(Self::Caladea),
+            "docx-liberation-sans" => Some(Self::LiberationSans),
+            "docx-liberation-serif" => Some(Self::LiberationSerif),
+            "docx-liberation-mono" => Some(Self::LiberationMono),
+            "docx-comic-sans" => Some(Self::ComicSans),
+            _ => None,
+        }
+    }
+
+    pub fn from_style(style: CharacterStyle) -> Self {
+        style
+            .font_family_name
+            .and_then(Self::from_family_name)
+            .unwrap_or(style.font_choice)
     }
 }
 
@@ -2465,7 +2527,7 @@ fn markdown_text_from_runs(runs: &[TextRun]) -> String {
         if text.is_empty() {
             continue;
         }
-        if run.style.font_choice == FontChoice::Monospace {
+        if FontChoice::from_style(run.style).is_monospace() {
             text = format!("`{text}`");
         }
         if run.style.bold {
@@ -2604,10 +2666,21 @@ fn css_font_family(style: CharacterStyle) -> String {
         Some("docx-liberation-mono") => {
             "\"Liberation Mono\", \"Courier New\", Consolas, monospace".to_owned()
         }
+        Some("docx-comic-sans") => "\"Comic Neue\", \"Comic Sans MS\", cursive".to_owned(),
         Some(name) => format!("\"{}\", sans-serif", name.replace('"', "\\\"")),
         None => match style.font_choice {
             FontChoice::Proportional => "sans-serif".to_owned(),
             FontChoice::Monospace => "monospace".to_owned(),
+            FontChoice::Carlito => "Carlito, Calibri, sans-serif".to_owned(),
+            FontChoice::Caladea => "Caladea, Cambria, serif".to_owned(),
+            FontChoice::LiberationSans => "\"Liberation Sans\", Arial, sans-serif".to_owned(),
+            FontChoice::LiberationSerif => {
+                "\"Liberation Serif\", \"Times New Roman\", serif".to_owned()
+            }
+            FontChoice::LiberationMono => {
+                "\"Liberation Mono\", \"Courier New\", Consolas, monospace".to_owned()
+            }
+            FontChoice::ComicSans => "\"Comic Neue\", \"Comic Sans MS\", cursive".to_owned(),
         },
     }
 }
