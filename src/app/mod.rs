@@ -198,6 +198,8 @@ pub struct CanvasState {
     pub move_drag: Option<ImageMoveDrag>,
     pub active_table_cell: Option<(usize, usize, usize)>,
     pub table_cell_rects: Vec<(usize, usize, usize, egui::Rect)>,
+    pub table_cell_content_rects: Vec<(usize, usize, usize, egui::Rect)>,
+    pub table_cell_selection: egui::text_selection::CCursorRange,
     pub table_resize_handles: Vec<TableResizeHandleRect>,
     pub table_resize_drag: Option<TableResizeDrag>,
 }
@@ -220,6 +222,8 @@ impl Default for CanvasState {
             move_drag: None,
             active_table_cell: None,
             table_cell_rects: Vec::new(),
+            table_cell_content_rects: Vec::new(),
+            table_cell_selection: egui::text_selection::CCursorRange::default(),
             table_resize_handles: Vec::new(),
             table_resize_drag: None,
         }

@@ -130,7 +130,7 @@ pub(super) fn handle_keyboard_input(
                 let now = ui.input(|i| i.time);
                 history.checkpoint_coalesced(document, now);
                 if canvas.active_table_cell.is_some() {
-                    append_to_active_table_cell(document, canvas, &text);
+                    replace_active_table_cell_selection_or_insert(document, canvas, &text);
                 } else {
                     replace_selection_or_insert(document, canvas, &text);
                 }
@@ -140,27 +140,39 @@ pub(super) fn handle_keyboard_input(
                 let now = ui.input(|i| i.time);
                 history.checkpoint(document, now);
                 if canvas.active_table_cell.is_some() {
-                    append_to_active_table_cell(document, canvas, &text);
+                    replace_active_table_cell_selection_or_insert(document, canvas, &text);
                 } else {
                     replace_selection_or_insert(document, canvas, &text);
                 }
                 changed = true;
             }
             Event::Copy => {
-                let selected = canvas.selection.as_sorted_char_range();
-                if selected.start < selected.end {
-                    ui.copy_text(document.selected_text(selected));
+                if canvas.active_table_cell.is_some() {
+                    copy_active_table_cell_selection(ui, document, canvas);
+                } else {
+                    let selected = canvas.selection.as_sorted_char_range();
+                    if selected.start < selected.end {
+                        ui.copy_text(document.selected_text(selected));
+                    }
                 }
             }
             Event::Cut => {
-                let selected = canvas.selection.as_sorted_char_range();
-                if selected.start < selected.end {
-                    let now = ui.input(|i| i.time);
-                    history.checkpoint(document, now);
-                    ui.copy_text(document.selected_text(selected.clone()));
-                    document.delete_range(selected.clone());
-                    canvas.selection = CCursorRange::one(CCursor::new(selected.start));
-                    changed = true;
+                if canvas.active_table_cell.is_some() {
+                    if copy_active_table_cell_selection(ui, document, canvas) {
+                        let now = ui.input(|i| i.time);
+                        history.checkpoint(document, now);
+                        changed |= delete_active_table_cell_selection(document, canvas);
+                    }
+                } else {
+                    let selected = canvas.selection.as_sorted_char_range();
+                    if selected.start < selected.end {
+                        let now = ui.input(|i| i.time);
+                        history.checkpoint(document, now);
+                        ui.copy_text(document.selected_text(selected.clone()));
+                        document.delete_range(selected.clone());
+                        canvas.selection = CCursorRange::one(CCursor::new(selected.start));
+                        changed = true;
+                    }
                 }
             }
             Event::Key {
@@ -207,7 +219,7 @@ pub(super) fn handle_keyboard_input(
                         let now = ui.input(|i| i.time);
                         history.checkpoint(document, now);
                         if canvas.active_table_cell.is_some() {
-                            append_to_active_table_cell(document, canvas, "\n");
+                            replace_active_table_cell_selection_or_insert(document, canvas, "\n");
                         } else {
                             replace_selection_or_insert(document, canvas, "\n");
                         }
@@ -231,7 +243,7 @@ pub(super) fn handle_keyboard_input(
                     | Key::End
                     | Key::A => {
                         if canvas.active_table_cell.is_some() {
-                            move_active_table_cell_by_key(document, canvas, key);
+                            move_active_table_cell_cursor_by_key(document, canvas, key, modifiers);
                             canvas.last_interaction_time = ui.input(|i| i.time);
                         } else if canvas.selection.on_key_press(os, galley, &modifiers, key) {
                             canvas.active_style =
@@ -249,23 +261,85 @@ pub(super) fn handle_keyboard_input(
     }
 
     if changed {
-        canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
-        canvas.active_paragraph_style = document.paragraph_style_at(canvas.selection.primary.index);
+        if let Some((table_id, row, col)) = canvas.active_table_cell {
+            if let Some(style) = document.table_cell_style_at(
+                table_id,
+                row,
+                col,
+                canvas.table_cell_selection.primary.index,
+            ) {
+                canvas.active_style = style;
+            }
+        } else {
+            canvas.active_style = document.typing_style_at(canvas.selection.primary.index);
+            canvas.active_paragraph_style =
+                document.paragraph_style_at(canvas.selection.primary.index);
+        }
         canvas.last_interaction_time = ui.input(|i| i.time);
     }
 
     changed
 }
 
-fn append_to_active_table_cell(document: &mut DocumentState, canvas: &mut CanvasState, text: &str) {
+fn replace_active_table_cell_selection_or_insert(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    text: &str,
+) {
     let Some((table_id, row, col)) = canvas.active_table_cell else {
         return;
     };
-    let mut next = document
-        .table_cell_text(table_id, row, col)
-        .unwrap_or_default();
-    next.push_str(text);
-    document.set_table_cell_text(table_id, row, col, &next);
+    let selected = canvas.table_cell_selection.as_sorted_char_range();
+    if let Some(next_index) = document.replace_table_cell_range_with_text(
+        table_id,
+        row,
+        col,
+        selected,
+        text,
+        canvas.active_style,
+    ) {
+        canvas.table_cell_selection = CCursorRange::one(CCursor::new(next_index));
+    }
+}
+
+fn copy_active_table_cell_selection(
+    ui: &mut egui::Ui,
+    document: &DocumentState,
+    canvas: &CanvasState,
+) -> bool {
+    let Some((table_id, row, col)) = canvas.active_table_cell else {
+        return false;
+    };
+    let selected = canvas.table_cell_selection.as_sorted_char_range();
+    if selected.start >= selected.end {
+        return false;
+    }
+    let Some(text) = document.table_cell_text(table_id, row, col) else {
+        return false;
+    };
+    let selected_text: String = text
+        .chars()
+        .skip(selected.start)
+        .take(selected.end - selected.start)
+        .collect();
+    ui.copy_text(selected_text);
+    true
+}
+
+fn delete_active_table_cell_selection(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+) -> bool {
+    let Some((table_id, row, col)) = canvas.active_table_cell else {
+        return false;
+    };
+    let selected = canvas.table_cell_selection.as_sorted_char_range();
+    if selected.start >= selected.end {
+        return false;
+    }
+    document.delete_table_cell_char_range(table_id, row, col, selected.clone());
+    canvas.table_cell_selection = CCursorRange::one(CCursor::new(selected.start));
+    true
 }
 
 fn delete_from_active_table_cell(
@@ -277,42 +351,55 @@ fn delete_from_active_table_cell(
     let Some((table_id, row, col)) = canvas.active_table_cell else {
         return false;
     };
-    let Some(mut text) = document.table_cell_text(table_id, row, col) else {
+    let Some(text) = document.table_cell_text(table_id, row, col) else {
         return false;
     };
-    if text.is_empty() {
-        return false;
-    }
-    if backward {
-        if word {
-            let mut chars: Vec<char> = text.chars().collect();
-            while chars.last().is_some_and(|ch| !is_word_char(*ch)) {
-                chars.pop();
-            }
-            while chars.last().is_some_and(|ch| is_word_char(*ch)) {
-                chars.pop();
-            }
-            text = chars.into_iter().collect();
-        } else {
-            text.pop();
+    let chars: Vec<char> = text.chars().collect();
+    let selected = canvas.table_cell_selection.as_sorted_char_range();
+    let range = if selected.start < selected.end {
+        selected
+    } else if backward {
+        let cursor = canvas.table_cell_selection.primary.index.min(chars.len());
+        if cursor == 0 {
+            return false;
         }
+        let mut start = cursor;
+        if word {
+            while start > 0 && !is_word_char(chars[start - 1]) {
+                start -= 1;
+            }
+            while start > 0 && is_word_char(chars[start - 1]) {
+                start -= 1;
+            }
+        } else {
+            start = start.saturating_sub(1);
+        }
+        start..cursor
     } else if word {
-        let chars: Vec<char> = text.chars().collect();
-        let mut end = 0usize;
+        let cursor = canvas.table_cell_selection.primary.index.min(chars.len());
+        if cursor >= chars.len() {
+            return false;
+        }
+        let mut end = cursor;
         while end < chars.len() && !is_word_char(chars[end]) {
             end += 1;
         }
         while end < chars.len() && is_word_char(chars[end]) {
             end += 1;
         }
-        if end == 0 {
-            end = 1;
+        if end == cursor {
+            end += 1;
         }
-        text = chars[end.min(chars.len())..].iter().collect();
+        cursor..end.min(chars.len())
     } else {
-        text = text.chars().skip(1).collect();
-    }
-    document.set_table_cell_text(table_id, row, col, &text);
+        let cursor = canvas.table_cell_selection.primary.index.min(chars.len());
+        if cursor >= chars.len() {
+            return false;
+        }
+        cursor..cursor + 1
+    };
+    document.delete_table_cell_char_range(table_id, row, col, range.clone());
+    canvas.table_cell_selection = CCursorRange::one(CCursor::new(range.start));
     true
 }
 
@@ -336,27 +423,52 @@ fn move_active_table_cell(document: &DocumentState, canvas: &mut CanvasState, fo
     } else {
         linear.saturating_sub(1)
     };
-    canvas.active_table_cell = Some((table_id, next / cols, next % cols));
+    let next_cell = (table_id, next / cols, next % cols);
+    canvas.active_table_cell = Some(next_cell);
+    canvas.table_cell_selection = CCursorRange::default();
+    if let Some(style) = document.table_cell_typing_style(next_cell.0, next_cell.1, next_cell.2) {
+        canvas.active_style = style;
+    }
 }
 
-fn move_active_table_cell_by_key(document: &DocumentState, canvas: &mut CanvasState, key: Key) {
-    let Some((table_id, mut row, mut col)) = canvas.active_table_cell else {
+fn move_active_table_cell_cursor_by_key(
+    document: &DocumentState,
+    canvas: &mut CanvasState,
+    key: Key,
+    modifiers: Modifiers,
+) {
+    let Some((table_id, row, col)) = canvas.active_table_cell else {
         return;
     };
-    let Some(table) = document.table_by_id(table_id) else {
-        canvas.active_table_cell = None;
+    let Some(text) = document.table_cell_text(table_id, row, col) else {
         return;
     };
-    match key {
-        Key::ArrowLeft => col = col.saturating_sub(1),
-        Key::ArrowRight => col = (col + 1).min(table.num_cols().saturating_sub(1)),
-        Key::ArrowUp => row = row.saturating_sub(1),
-        Key::ArrowDown => row = (row + 1).min(table.num_rows().saturating_sub(1)),
-        Key::Home => col = 0,
-        Key::End => col = table.num_cols().saturating_sub(1),
-        _ => {}
+
+    let len = text.chars().count();
+    let selected = canvas.table_cell_selection.as_sorted_char_range();
+    let current = canvas.table_cell_selection.primary.index.min(len);
+    let next = match key {
+        Key::ArrowLeft if selected.start < selected.end && !modifiers.shift => selected.start,
+        Key::ArrowRight if selected.start < selected.end && !modifiers.shift => selected.end,
+        Key::ArrowLeft => current.saturating_sub(1),
+        Key::ArrowRight => (current + 1).min(len),
+        Key::Home | Key::ArrowUp => 0,
+        Key::End | Key::ArrowDown => len,
+        Key::A if modifiers.command => {
+            canvas.table_cell_selection = CCursorRange::two(CCursor::new(0), CCursor::new(len));
+            return;
+        }
+        _ => current,
+    };
+
+    if modifiers.shift {
+        canvas.table_cell_selection.primary = CCursor::new(next);
+    } else {
+        canvas.table_cell_selection = CCursorRange::one(CCursor::new(next));
     }
-    canvas.active_table_cell = Some((table_id, row, col));
+    if let Some(style) = document.table_cell_style_at(table_id, row, col, next) {
+        canvas.active_style = style;
+    }
 }
 
 fn handle_shortcut_key(
@@ -377,7 +489,14 @@ fn handle_shortcut_key(
             let now = ui.input(|i| i.time);
             history.checkpoint(document, now);
             let next = !canvas.active_style.bold;
-            if range.start < range.end {
+            if let Some((table_id, row, col)) = canvas.active_table_cell {
+                let range = canvas.table_cell_selection.as_sorted_char_range();
+                if range.start < range.end {
+                    document.apply_style_to_table_cell_range(table_id, row, col, range, |style| {
+                        style.bold = next
+                    });
+                }
+            } else if range.start < range.end {
                 document.apply_style_to_range(range, |style| style.bold = next);
             }
             canvas.active_style.bold = next;
@@ -387,7 +506,14 @@ fn handle_shortcut_key(
             let now = ui.input(|i| i.time);
             history.checkpoint(document, now);
             let next = !canvas.active_style.italic;
-            if range.start < range.end {
+            if let Some((table_id, row, col)) = canvas.active_table_cell {
+                let range = canvas.table_cell_selection.as_sorted_char_range();
+                if range.start < range.end {
+                    document.apply_style_to_table_cell_range(table_id, row, col, range, |style| {
+                        style.italic = next
+                    });
+                }
+            } else if range.start < range.end {
                 document.apply_style_to_range(range, |style| style.italic = next);
             }
             canvas.active_style.italic = next;
@@ -397,11 +523,28 @@ fn handle_shortcut_key(
             let now = ui.input(|i| i.time);
             history.checkpoint(document, now);
             let next = !canvas.active_style.underline;
-            if range.start < range.end {
+            if let Some((table_id, row, col)) = canvas.active_table_cell {
+                let range = canvas.table_cell_selection.as_sorted_char_range();
+                if range.start < range.end {
+                    document.apply_style_to_table_cell_range(table_id, row, col, range, |style| {
+                        style.underline = next
+                    });
+                }
+            } else if range.start < range.end {
                 document.apply_style_to_range(range, |style| style.underline = next);
             }
             canvas.active_style.underline = next;
             true
+        }
+        Key::A if canvas.active_table_cell.is_some() => {
+            if let Some((table_id, row, col)) = canvas.active_table_cell {
+                if let Some(len) = document.table_cell_len(table_id, row, col) {
+                    canvas.table_cell_selection =
+                        CCursorRange::two(CCursor::new(0), CCursor::new(len));
+                    return true;
+                }
+            }
+            false
         }
         _ => false,
     }

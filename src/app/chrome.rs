@@ -458,6 +458,9 @@ pub(super) fn paint_ribbon(
                     ribbon_picture_group(ui, document, canvas, status_message, history, palette);
                 }
                 RibbonTab::Table => {
+                    ribbon_font_group(ui, document, canvas, history, palette);
+                    ribbon_color_group(ui, document, canvas, history, palette);
+                    ribbon_insert_group(ui, document, canvas, status_message, history, palette);
                     table_format_group(ui, document, canvas, status_message, history, palette);
                 }
             });

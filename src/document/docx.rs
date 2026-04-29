@@ -654,6 +654,7 @@ fn parse_docx_table(
                         } else {
                             runs
                         },
+                        images: Vec::new(),
                         col_span: 1,
                         row_span: 1,
                     };

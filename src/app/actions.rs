@@ -45,6 +45,8 @@ pub(super) fn open_document(
                 canvas.move_drag = None;
                 canvas.active_table_cell = None;
                 canvas.table_cell_rects.clear();
+                canvas.table_cell_content_rects.clear();
+                canvas.table_cell_selection = egui::text_selection::CCursorRange::default();
                 canvas.table_resize_handles.clear();
                 canvas.table_resize_drag = None;
                 *current_path = match path.extension().and_then(|ext| ext.to_str()) {
@@ -167,6 +169,27 @@ pub(super) fn insert_image(
     };
 
     history.checkpoint(document, f64::NAN);
+    if let Some((table_id, row, col)) = canvas.active_table_cell {
+        document.insert_table_cell_image(table_id, row, col, image, canvas.active_style);
+        if let Some(len) = document.table_cell_len(table_id, row, col) {
+            canvas.table_cell_selection = egui::text_selection::CCursorRange::one(
+                egui::epaint::text::cursor::CCursor::new(len),
+            );
+        }
+        canvas.selected_image_id = None;
+        canvas.resize_drag = None;
+        canvas.move_drag = None;
+        canvas.table_resize_drag = None;
+        canvas.image_textures.clear();
+        *status_message = format!(
+            "Inserted {} into table cell",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("image")
+        );
+        return;
+    }
+
     let selected = canvas.selection.as_sorted_char_range();
     let insert_at = selected.start;
     if selected.start < selected.end {
@@ -417,6 +440,18 @@ pub(super) fn set_highlight_color(
 }
 
 pub(super) fn sync_active_style(document: &DocumentState, canvas: &mut CanvasState) {
+    if let Some((table_id, row, col)) = canvas.active_table_cell {
+        if let Some(style) = document.table_cell_style_at(
+            table_id,
+            row,
+            col,
+            canvas.table_cell_selection.primary.index,
+        ) {
+            canvas.active_style = style;
+        }
+        return;
+    }
+
     let range = canvas.selection.as_sorted_char_range();
     let cursor_index = if range.start < range.end {
         range.end
@@ -472,6 +507,20 @@ fn apply_selection_or_active_style(
     canvas: &mut CanvasState,
     mutate: impl Fn(&mut CharacterStyle) + Copy,
 ) {
+    if let Some((table_id, row, col)) = canvas.active_table_cell {
+        let range = canvas.table_cell_selection.as_sorted_char_range();
+        if range.start < range.end {
+            document.apply_style_to_table_cell_range(table_id, row, col, range, mutate);
+        } else if document
+            .table_cell_len(table_id, row, col)
+            .is_some_and(|len| len == 0)
+        {
+            document.apply_style_to_table_cell(table_id, row, col, mutate);
+        }
+        mutate(&mut canvas.active_style);
+        return;
+    }
+
     let range = canvas.selection.as_sorted_char_range();
     if range.start < range.end {
         document.apply_style_to_range(range, mutate);
@@ -490,14 +539,7 @@ fn load_image_for_document(
     let width_points = (decoded.width() as f32 * 0.75).clamp(24.0, document.page_size.width_points);
     let height_points =
         (decoded.height() as f32 * 0.75).clamp(24.0, document.page_size.height_points);
-    let next_id = document
-        .paragraph_images
-        .iter()
-        .flatten()
-        .map(|image| image.id)
-        .max()
-        .unwrap_or(0)
-        + 1;
+    let next_id = document.next_image_id();
 
     Ok(DocumentImage {
         id: next_id,
@@ -560,6 +602,7 @@ pub(super) fn insert_table(
         .max()
     {
         canvas.active_table_cell = Some((table_id, 0, 0));
+        canvas.table_cell_selection = egui::text_selection::CCursorRange::default();
     }
     canvas.selected_image_id = None;
     canvas.active_style = document.typing_style_at(cursor_index);

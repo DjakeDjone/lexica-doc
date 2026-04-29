@@ -10,6 +10,7 @@ use eframe::egui::{
     epaint::text::cursor::CCursor,
     epaint::CornerRadius,
     text_selection::visuals::{paint_text_cursor, paint_text_selection},
+    text_selection::CCursorRange,
     Align2, Color32, EventFilter, FontFamily, FontId, Id, Rect, Sense, Stroke, StrokeKind,
 };
 
@@ -20,7 +21,8 @@ use crate::{
     },
     document::{
         text_format, CharacterStyle, DocumentImage, DocumentState, DocumentTable, ImageLayoutMode,
-        ImageRendering, LineSpacingKind, ParagraphAlignment, WrapMode, OBJECT_REPLACEMENT_CHAR,
+        ImageRendering, LineSpacingKind, ParagraphAlignment, TableCell, WrapMode,
+        OBJECT_REPLACEMENT_CHAR,
     },
     grammar::GrammarError,
     layout::{
@@ -148,6 +150,7 @@ pub fn paint_document_canvas(
 
     let mut new_image_rects: Vec<(usize, Rect)> = Vec::new();
     let mut new_table_cell_rects: Vec<(usize, usize, usize, Rect)> = Vec::new();
+    let mut new_table_cell_content_rects: Vec<(usize, usize, usize, Rect)> = Vec::new();
     let mut new_table_resize_handles: Vec<TableResizeHandleRect> = Vec::new();
 
     for page in &page_layout.pages {
@@ -252,15 +255,19 @@ pub fn paint_document_canvas(
                 page.content_rect.top() + table_y - page.start_y,
             );
 
+            let active_cell = canvas.active_table_cell;
             let geometry = paint_table(
+                ui,
+                canvas,
                 &page_clipped_painter,
                 &table_layout.table,
                 table_origin,
                 zoom,
-                canvas.active_table_cell,
+                active_cell,
                 ui.input(|i| i.time),
             );
             new_table_cell_rects.extend(geometry.cell_rects);
+            new_table_cell_content_rects.extend(geometry.cell_content_rects);
             new_table_resize_handles.extend(geometry.resize_handles);
         }
 
@@ -356,6 +363,7 @@ pub fn paint_document_canvas(
 
     canvas.image_rects = new_image_rects;
     canvas.table_cell_rects = new_table_cell_rects;
+    canvas.table_cell_content_rects = new_table_cell_content_rects;
     canvas.table_resize_handles = new_table_resize_handles;
 
     let (table_pointer_captured, table_document_changed) =
@@ -629,6 +637,39 @@ fn table_cell_hit(canvas: &CanvasState, pointer_pos: egui::Pos2) -> Option<(usiz
         .map(|(table_id, row, col, _)| (*table_id, *row, *col))
 }
 
+fn table_cell_content_rect(
+    canvas: &CanvasState,
+    cell: (usize, usize, usize),
+) -> Option<egui::Rect> {
+    canvas
+        .table_cell_content_rects
+        .iter()
+        .find(|(table_id, row, col, _)| (*table_id, *row, *col) == cell)
+        .map(|(_, _, _, rect)| *rect)
+}
+
+fn table_cell_cursor_from_pointer(
+    ui: &egui::Ui,
+    canvas: &CanvasState,
+    document: &DocumentState,
+    cell_ref: (usize, usize, usize),
+    pointer_pos: egui::Pos2,
+) -> Option<CCursor> {
+    let content_rect = table_cell_content_rect(canvas, cell_ref)?;
+    let cell = document
+        .table_by_id(cell_ref.0)?
+        .rows
+        .get(cell_ref.1)?
+        .get(cell_ref.2)?;
+    let galley = table_cell_text_galley(
+        ui.painter(),
+        cell,
+        content_rect.width().max(1.0),
+        canvas.zoom,
+    );
+    Some(galley.cursor_from_pos(pointer_pos - content_rect.min))
+}
+
 fn table_resize_handle_hit(
     canvas: &CanvasState,
     pointer_pos: egui::Pos2,
@@ -691,6 +732,18 @@ fn handle_table_interaction(
             }
             return (true, document_changed);
         }
+
+        if let Some(cell) = canvas.active_table_cell {
+            if let Some(pointer_pos) = response.interact_pointer_pos() {
+                if let Some(cursor) =
+                    table_cell_cursor_from_pointer(ui, canvas, document, cell, pointer_pos)
+                {
+                    canvas.table_cell_selection.primary = cursor;
+                    canvas.last_interaction_time = ui.input(|i| i.time);
+                    return (true, document_changed);
+                }
+            }
+        }
     }
 
     let Some(pointer_pos) = response.interact_pointer_pos() else {
@@ -737,12 +790,50 @@ fn handle_table_interaction(
                 }
             }
         }
+
+        if let Some(cell) = table_cell_hit(canvas, pointer_pos) {
+            response.request_focus();
+            canvas.active_table_cell = Some(cell);
+            if let Some(cursor) =
+                table_cell_cursor_from_pointer(ui, canvas, document, cell, pointer_pos)
+            {
+                if ui.input(|i| i.modifiers.shift) {
+                    canvas.table_cell_selection.primary = cursor;
+                } else {
+                    canvas.table_cell_selection = CCursorRange::one(cursor);
+                }
+                if let Some(style) =
+                    document.table_cell_style_at(cell.0, cell.1, cell.2, cursor.index)
+                {
+                    canvas.active_style = style;
+                }
+            }
+            canvas.selected_image_id = None;
+            canvas.resize_drag = None;
+            canvas.move_drag = None;
+            canvas.last_interaction_time = ui.input(|i| i.time);
+            return (true, document_changed);
+        }
     }
 
     if response.clicked() {
         if let Some(cell) = table_cell_hit(canvas, pointer_pos) {
             response.request_focus();
             canvas.active_table_cell = Some(cell);
+            if let Some(cursor) =
+                table_cell_cursor_from_pointer(ui, canvas, document, cell, pointer_pos)
+            {
+                if ui.input(|i| i.modifiers.shift) {
+                    canvas.table_cell_selection.primary = cursor;
+                } else {
+                    canvas.table_cell_selection = CCursorRange::one(cursor);
+                }
+                if let Some(style) =
+                    document.table_cell_style_at(cell.0, cell.1, cell.2, cursor.index)
+                {
+                    canvas.active_style = style;
+                }
+            }
             canvas.selected_image_id = None;
             canvas.resize_drag = None;
             canvas.move_drag = None;
@@ -750,6 +841,7 @@ fn handle_table_interaction(
             return (true, document_changed);
         }
         canvas.active_table_cell = None;
+        canvas.table_cell_selection = CCursorRange::default();
     }
 
     (false, document_changed)
@@ -2512,10 +2604,13 @@ mod tests {
 
 struct TablePaintGeometry {
     cell_rects: Vec<(usize, usize, usize, Rect)>,
+    cell_content_rects: Vec<(usize, usize, usize, Rect)>,
     resize_handles: Vec<TableResizeHandleRect>,
 }
 
 fn paint_table(
+    ui: &mut egui::Ui,
+    canvas: &mut CanvasState,
     painter: &egui::Painter,
     table: &DocumentTable,
     origin: egui::Pos2,
@@ -2533,12 +2628,11 @@ fn paint_table(
         .collect();
     let mut geometry = TablePaintGeometry {
         cell_rects: Vec::new(),
+        cell_content_rects: Vec::new(),
         resize_handles: Vec::new(),
     };
 
     let actual_row_heights = table_row_heights_screen(painter, table, zoom);
-    let cell_font = FontId::proportional(document_points_to_screen_points(11.0, zoom));
-
     let total_width: f32 = col_widths.iter().sum();
     let total_height: f32 = actual_row_heights.iter().sum();
 
@@ -2614,34 +2708,35 @@ fn paint_table(
                 StrokeKind::Inside,
             );
 
-            let text = cell.plain_text();
-            let text_color = if is_header {
-                Color32::from_rgb(36, 39, 46)
-            } else {
-                Color32::from_rgb(50, 53, 60)
-            };
-            if !text.is_empty() {
-                let text_font = if is_header {
-                    FontId::new(
-                        document_points_to_screen_points(11.0, zoom),
-                        egui::FontFamily::Proportional,
-                    )
-                } else {
-                    cell_font.clone()
-                };
+            let available_width = (col_width - cell_padding * 2.0).max(1.0);
+            let text_pos = egui::pos2(x + cell_padding, y + cell_padding);
+            let content_rect = Rect::from_min_size(
+                text_pos,
+                egui::vec2(available_width, row_height - cell_padding * 2.0),
+            );
+            geometry
+                .cell_content_rects
+                .push((table.id, row_idx, col_idx, content_rect));
+            let mut galley = table_cell_text_galley(painter, cell, available_width, zoom);
+            let text_height = galley.rect.height();
 
-                let available_width = (col_width - cell_padding * 2.0).max(1.0);
-                let galley = painter.layout(text.clone(), text_font, text_color, available_width);
-
-                let text_pos = egui::pos2(x + cell_padding, y + cell_padding);
-                let text_rect = Rect::from_min_size(
-                    text_pos,
-                    egui::vec2(available_width, row_height - cell_padding * 2.0),
+            if active_cell == Some((table.id, row_idx, col_idx))
+                && !canvas.table_cell_selection.is_empty()
+            {
+                paint_text_selection(
+                    &mut galley,
+                    ui.visuals(),
+                    &canvas.table_cell_selection,
+                    None,
                 );
-                painter
-                    .with_clip_rect(text_rect)
-                    .galley(text_pos, galley, text_color);
             }
+            painter.with_clip_rect(content_rect).galley(
+                text_pos,
+                galley.clone(),
+                Color32::TRANSPARENT,
+            );
+
+            paint_table_cell_images(ui, canvas, painter, cell, content_rect, text_height, zoom);
 
             if active_cell == Some((table.id, row_idx, col_idx)) {
                 let focus_color = Color32::from_rgb(54, 116, 206);
@@ -2651,22 +2746,17 @@ fn paint_table(
                     Stroke::new(2.0, focus_color),
                     StrokeKind::Inside,
                 );
-                if ((time * 2.0) as i64) % 2 == 0 {
-                    let available_width = (col_width - cell_padding * 2.0).max(1.0);
-                    let galley =
-                        painter.layout(text, cell_font.clone(), text_color, available_width);
-                    let caret_x = (x + cell_padding + galley.rect.width())
-                        .min(cell_rect.right() - cell_padding);
-                    let caret_top = y + cell_padding;
-                    let caret_bottom = (y + cell_padding + galley.rect.height())
-                        .max(caret_top + document_points_to_screen_points(11.0, zoom))
-                        .min(cell_rect.bottom() - cell_padding);
-                    painter.line_segment(
-                        [
-                            egui::pos2(caret_x, caret_top),
-                            egui::pos2(caret_x, caret_bottom),
-                        ],
-                        Stroke::new(1.5, focus_color),
+                if let Some(caret_rect) = table_cell_caret_rect(
+                    &galley,
+                    canvas.table_cell_selection.primary,
+                    text_pos,
+                    zoom,
+                ) {
+                    paint_text_cursor(
+                        ui,
+                        painter,
+                        caret_rect.intersect(content_rect),
+                        time - canvas.last_interaction_time,
                     );
                 }
             }
@@ -2710,10 +2800,106 @@ fn span_sum(values: &[f32], start: usize, span: usize) -> f32 {
     values.iter().skip(start).take(span).sum()
 }
 
+fn table_cell_caret_rect(
+    galley: &egui::Galley,
+    cursor: CCursor,
+    text_pos: egui::Pos2,
+    zoom: f32,
+) -> Option<Rect> {
+    let mut rect = galley.pos_from_cursor(cursor).translate(text_pos.to_vec2());
+    if let Some(row) = galley.rows.get(galley.layout_from_cursor(cursor).row) {
+        rect.min.y = text_pos.y + row.min_y();
+        rect.max.y = text_pos.y + row.max_y();
+    } else {
+        rect.max.y = rect.min.y + document_points_to_screen_points(14.0, zoom);
+    }
+    Some(rect.expand2(egui::vec2(0.75, 0.75)))
+}
+
+fn table_cell_text_galley(
+    painter: &egui::Painter,
+    cell: &TableCell,
+    available_width: f32,
+    zoom: f32,
+) -> Arc<egui::Galley> {
+    let mut job = egui::epaint::text::LayoutJob::default();
+    job.wrap.max_width = available_width;
+    job.break_on_newline = true;
+
+    for run in &cell.runs {
+        let text: String = run
+            .text
+            .chars()
+            .filter(|ch| *ch != OBJECT_REPLACEMENT_CHAR)
+            .collect();
+        if !text.is_empty() {
+            job.append(&text, 0.0, text_format(run.style, zoom));
+        }
+    }
+
+    painter.layout_job(job)
+}
+
+fn table_cell_image_size(image: &DocumentImage, available_width: f32, zoom: f32) -> egui::Vec2 {
+    let raw = image_display_size(image, available_width, zoom);
+    if raw.x <= available_width {
+        return raw;
+    }
+
+    let scale = available_width / raw.x.max(1.0);
+    egui::vec2(available_width, (raw.y * scale).max(1.0))
+}
+
+fn paint_table_cell_images(
+    ui: &mut egui::Ui,
+    canvas: &mut CanvasState,
+    painter: &egui::Painter,
+    cell: &TableCell,
+    content_rect: Rect,
+    text_height: f32,
+    zoom: f32,
+) {
+    let mut y = content_rect.top() + text_height;
+    if text_height > 0.0 && !cell.images.is_empty() {
+        y += document_points_to_screen_points(3.0, zoom);
+    }
+
+    for image in &cell.images {
+        let image_size = table_cell_image_size(image, content_rect.width(), zoom);
+        if y + image_size.y > content_rect.bottom() {
+            break;
+        }
+        let rect = Rect::from_min_size(egui::pos2(content_rect.left(), y), image_size);
+        if let Some(texture) = texture_for_image(ui.ctx(), canvas, image) {
+            let alpha = (image.opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+            painter.image(
+                texture.id(),
+                rect,
+                Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                Color32::from_white_alpha(alpha),
+            );
+        } else {
+            painter.rect_stroke(
+                rect,
+                CornerRadius::same(2),
+                Stroke::new(1.0, Color32::from_rgb(150, 150, 150)),
+                StrokeKind::Inside,
+            );
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                &image.alt_text,
+                FontId::new(11.0 * zoom, FontFamily::Proportional),
+                Color32::from_rgb(50, 53, 60),
+            );
+        }
+        y += image_size.y + document_points_to_screen_points(3.0, zoom);
+    }
+}
+
 fn table_row_heights_screen(painter: &egui::Painter, table: &DocumentTable, zoom: f32) -> Vec<f32> {
     let cell_padding = document_points_to_screen_points(4.0, zoom);
     let default_row_height = document_points_to_screen_points(20.0, zoom);
-    let cell_font = FontId::proportional(document_points_to_screen_points(11.0, zoom));
     let col_widths: Vec<f32> = table
         .col_widths_points
         .iter()
@@ -2732,18 +2918,16 @@ fn table_row_heights_screen(painter: &egui::Painter, table: &DocumentTable, zoom
                 continue;
             }
             let col_width = span_sum(&col_widths, col_idx, cell.col_span.max(1) as usize);
-            let text = cell.plain_text();
-            if text.is_empty() {
-                continue;
-            }
             let available_width = (col_width - cell_padding * 2.0).max(1.0);
-            let galley = painter.layout(
-                text,
-                cell_font.clone(),
-                Color32::from_rgb(36, 39, 46),
-                available_width,
-            );
-            let required = galley.rect.height() + cell_padding * 2.0;
+            let galley = table_cell_text_galley(painter, cell, available_width, zoom);
+            let mut required = galley.rect.height() + cell_padding * 2.0;
+            if !cell.images.is_empty() {
+                required += document_points_to_screen_points(3.0, zoom);
+            }
+            for image in &cell.images {
+                let image_size = table_cell_image_size(image, available_width, zoom);
+                required += image_size.y + document_points_to_screen_points(3.0, zoom);
+            }
             let row_span = cell.row_span.max(1) as usize;
             let end_row = (row_idx + row_span).min(row_heights.len());
             let current: f32 = row_heights[row_idx..end_row].iter().sum();

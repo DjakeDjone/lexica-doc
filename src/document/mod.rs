@@ -356,6 +356,7 @@ impl DocumentImage {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TableCell {
     pub runs: Vec<TextRun>,
+    pub images: Vec<DocumentImage>,
     pub col_span: u16,
     pub row_span: u16,
 }
@@ -367,6 +368,7 @@ impl TableCell {
                 text: text.to_owned(),
                 style: CharacterStyle::default(),
             }],
+            images: Vec::new(),
             col_span: 1,
             row_span: 1,
         }
@@ -374,6 +376,185 @@ impl TableCell {
 
     pub fn plain_text(&self) -> String {
         self.runs.iter().map(|run| run.text.as_str()).collect()
+    }
+
+    fn total_chars(&self) -> usize {
+        self.runs.iter().map(|run| run.text.chars().count()).sum()
+    }
+
+    fn typing_style(&self) -> CharacterStyle {
+        self.runs.last().map(|run| run.style).unwrap_or_default()
+    }
+
+    fn style_at(&self, char_index: usize) -> CharacterStyle {
+        let target = char_index.min(self.total_chars());
+        let mut offset = 0usize;
+        for run in &self.runs {
+            let run_chars = run.text.chars().count();
+            if target < offset + run_chars {
+                return run.style;
+            }
+            offset += run_chars;
+        }
+        self.typing_style()
+    }
+
+    fn append_text(&mut self, text: &str, style: CharacterStyle) {
+        self.insert_text(self.total_chars(), text, style);
+    }
+
+    fn apply_style(&mut self, mutate: impl Fn(&mut CharacterStyle) + Copy) {
+        for run in &mut self.runs {
+            mutate(&mut run.style);
+        }
+        self.normalize_runs();
+    }
+
+    fn apply_style_to_range(&mut self, range: Range<usize>, mutate: impl Fn(&mut CharacterStyle)) {
+        if range.start >= range.end {
+            return;
+        }
+
+        let start = range.start.min(self.total_chars());
+        let end = range.end.min(self.total_chars());
+        self.split_at_char(start);
+        self.split_at_char(end);
+
+        let mut offset = 0usize;
+        for run in &mut self.runs {
+            let run_chars = run.text.chars().count();
+            if offset >= start && offset + run_chars <= end {
+                mutate(&mut run.style);
+            }
+            offset += run_chars;
+        }
+
+        self.normalize_runs();
+    }
+
+    fn insert_text(&mut self, char_index: usize, text: &str, style: CharacterStyle) {
+        if text.is_empty() {
+            return;
+        }
+
+        let insertion_index = char_index.min(self.total_chars());
+        self.split_at_char(insertion_index);
+
+        let mut offset = 0usize;
+        let mut target = self.runs.len();
+        for (idx, run) in self.runs.iter().enumerate() {
+            if offset == insertion_index {
+                target = idx;
+                break;
+            }
+            offset += run.text.chars().count();
+        }
+
+        self.runs.insert(
+            target,
+            TextRun {
+                text: text.to_owned(),
+                style,
+            },
+        );
+        self.normalize_runs();
+    }
+
+    fn replace_range_with_text(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        style: CharacterStyle,
+    ) -> usize {
+        let start = range.start.min(self.total_chars());
+        let end = range.end.min(self.total_chars());
+        self.delete_char_range(start..end);
+        self.insert_text(start, text, style);
+        start + text.chars().count()
+    }
+
+    fn delete_char_range(&mut self, range: Range<usize>) {
+        if range.start >= range.end {
+            return;
+        }
+
+        let start = range.start.min(self.total_chars());
+        let end = range.end.min(self.total_chars());
+        let mut next_runs = Vec::new();
+        let mut char_index = 0usize;
+        let mut image_index = 0usize;
+        let mut removed_images = Vec::new();
+
+        for run in &self.runs {
+            let mut kept = String::new();
+            for ch in run.text.chars() {
+                let removing = char_index >= start && char_index < end;
+                if ch == OBJECT_REPLACEMENT_CHAR {
+                    if removing {
+                        removed_images.push(image_index);
+                    }
+                    image_index += 1;
+                }
+                if !removing {
+                    kept.push(ch);
+                }
+                char_index += 1;
+            }
+            append_text_run(&mut next_runs, &kept, run.style);
+        }
+
+        if !removed_images.is_empty() {
+            self.images = self
+                .images
+                .drain(..)
+                .enumerate()
+                .filter_map(|(idx, image)| (!removed_images.contains(&idx)).then_some(image))
+                .collect();
+        }
+        self.runs = next_runs;
+        self.normalize_runs();
+    }
+
+    fn split_at_char(&mut self, char_index: usize) {
+        if char_index == 0 || char_index >= self.total_chars() {
+            return;
+        }
+
+        let mut offset = 0usize;
+        for idx in 0..self.runs.len() {
+            let run_chars = self.runs[idx].text.chars().count();
+            if char_index > offset && char_index < offset + run_chars {
+                let local = char_index - offset;
+                let byte_index = char_to_byte_index(&self.runs[idx].text, local);
+                let right = self.runs[idx].text.split_off(byte_index);
+                let style = self.runs[idx].style;
+                self.runs.insert(idx + 1, TextRun { text: right, style });
+                break;
+            }
+            offset += run_chars;
+        }
+    }
+
+    fn normalize_runs(&mut self) {
+        let fallback_style = self.runs.last().map(|run| run.style).unwrap_or_default();
+        self.runs.retain(|run| !run.text.is_empty());
+        let mut normalized: Vec<TextRun> = Vec::with_capacity(self.runs.len().max(1));
+        for run in self.runs.drain(..) {
+            if let Some(last) = normalized.last_mut() {
+                if last.style == run.style {
+                    last.text.push_str(&run.text);
+                    continue;
+                }
+            }
+            normalized.push(run);
+        }
+        if normalized.is_empty() {
+            normalized.push(TextRun {
+                text: String::new(),
+                style: fallback_style,
+            });
+        }
+        self.runs = normalized;
     }
 }
 
@@ -1189,6 +1370,28 @@ impl DocumentState {
             .find(|image| image.id == id)
     }
 
+    pub fn next_image_id(&self) -> usize {
+        let paragraph_max = self
+            .paragraph_images
+            .iter()
+            .flatten()
+            .map(|image| image.id)
+            .max()
+            .unwrap_or(0);
+        let table_max = self
+            .paragraph_tables
+            .iter()
+            .flatten()
+            .flat_map(|table| table.rows.iter())
+            .flat_map(|row| row.iter())
+            .flat_map(|cell| cell.images.iter())
+            .map(|image| image.id)
+            .max()
+            .unwrap_or(0);
+
+        paragraph_max.max(table_max) + 1
+    }
+
     pub fn insert_table(&mut self, char_index: usize, num_rows: usize, num_cols: usize) -> usize {
         let available_width =
             self.page_size.width_points - self.margins.left_points - self.margins.right_points;
@@ -1320,6 +1523,7 @@ impl DocumentState {
                     text: text.to_owned(),
                     style: CharacterStyle::default(),
                 }];
+                cell.images.clear();
             }
         }
     }
@@ -1329,6 +1533,127 @@ impl DocumentState {
             .and_then(|table| table.rows.get(row))
             .and_then(|cells| cells.get(col))
             .map(TableCell::plain_text)
+    }
+
+    pub fn table_cell_typing_style(
+        &self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+    ) -> Option<CharacterStyle> {
+        self.table_by_id(table_id)
+            .and_then(|table| table.rows.get(row))
+            .and_then(|cells| cells.get(col))
+            .map(TableCell::typing_style)
+    }
+
+    pub fn table_cell_style_at(
+        &self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+        char_index: usize,
+    ) -> Option<CharacterStyle> {
+        self.table_by_id(table_id)
+            .and_then(|table| table.rows.get(row))
+            .and_then(|cells| cells.get(col))
+            .map(|cell| cell.style_at(char_index))
+    }
+
+    pub fn table_cell_len(&self, table_id: usize, row: usize, col: usize) -> Option<usize> {
+        self.table_by_id(table_id)
+            .and_then(|table| table.rows.get(row))
+            .and_then(|cells| cells.get(col))
+            .map(TableCell::total_chars)
+    }
+
+    pub fn append_table_cell_text(
+        &mut self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+        text: &str,
+        style: CharacterStyle,
+    ) {
+        if let Some(table) = self.table_by_id_mut(table_id) {
+            if let Some(cell) = table.rows.get_mut(row).and_then(|cells| cells.get_mut(col)) {
+                cell.append_text(text, style);
+            }
+        }
+    }
+
+    pub fn replace_table_cell_range_with_text(
+        &mut self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+        range: Range<usize>,
+        text: &str,
+        style: CharacterStyle,
+    ) -> Option<usize> {
+        self.table_by_id_mut(table_id)
+            .and_then(|table| table.rows.get_mut(row))
+            .and_then(|cells| cells.get_mut(col))
+            .map(|cell| cell.replace_range_with_text(range, text, style))
+    }
+
+    pub fn apply_style_to_table_cell(
+        &mut self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+        mutate: impl Fn(&mut CharacterStyle) + Copy,
+    ) {
+        if let Some(table) = self.table_by_id_mut(table_id) {
+            if let Some(cell) = table.rows.get_mut(row).and_then(|cells| cells.get_mut(col)) {
+                cell.apply_style(mutate);
+            }
+        }
+    }
+
+    pub fn apply_style_to_table_cell_range(
+        &mut self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+        range: Range<usize>,
+        mutate: impl Fn(&mut CharacterStyle) + Copy,
+    ) {
+        if let Some(table) = self.table_by_id_mut(table_id) {
+            if let Some(cell) = table.rows.get_mut(row).and_then(|cells| cells.get_mut(col)) {
+                cell.apply_style_to_range(range, mutate);
+            }
+        }
+    }
+
+    pub fn delete_table_cell_char_range(
+        &mut self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+        range: Range<usize>,
+    ) {
+        if let Some(table) = self.table_by_id_mut(table_id) {
+            if let Some(cell) = table.rows.get_mut(row).and_then(|cells| cells.get_mut(col)) {
+                cell.delete_char_range(range);
+            }
+        }
+    }
+
+    pub fn insert_table_cell_image(
+        &mut self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+        image: DocumentImage,
+        style: CharacterStyle,
+    ) {
+        if let Some(table) = self.table_by_id_mut(table_id) {
+            if let Some(cell) = table.rows.get_mut(row).and_then(|cells| cells.get_mut(col)) {
+                cell.append_text(&OBJECT_REPLACEMENT_CHAR.to_string(), style);
+                cell.images.push(image);
+            }
+        }
     }
 
     pub fn resize_table_column_pair(
@@ -1387,19 +1712,22 @@ impl DocumentState {
         if next_span == 0 {
             return false;
         }
-        let merged_text = row_cells[col + 1].plain_text();
+        let mut merged_cell = row_cells[col + 1].clone();
+        let merged_text = merged_cell.plain_text();
         if !merged_text.is_empty() {
-            if let Some(run) = row_cells[col].runs.last_mut() {
-                if !run.text.is_empty() {
-                    run.text.push(' ');
-                }
-                run.text.push_str(&merged_text);
+            if !row_cells[col].plain_text().is_empty() {
+                let style = row_cells[col].typing_style();
+                row_cells[col].append_text(" ", style);
             }
+            row_cells[col].runs.append(&mut merged_cell.runs);
+            row_cells[col].normalize_runs();
         }
+        row_cells[col].images.append(&mut merged_cell.images);
         row_cells[col].col_span = row_cells[col].col_span.saturating_add(next_span);
         row_cells[col + 1].col_span = 0;
         row_cells[col + 1].row_span = 0;
         row_cells[col + 1].runs.clear();
+        row_cells[col + 1].images.clear();
         true
     }
 
@@ -1999,7 +2327,15 @@ fn plain_text_from_runs(runs: &[TextRun]) -> String {
 fn table_to_plain_text(table: &DocumentTable) -> String {
     let mut lines = Vec::new();
     for row in &table.rows {
-        let cells: Vec<String> = row.iter().map(|cell| cell.plain_text()).collect();
+        let cells: Vec<String> = row
+            .iter()
+            .map(|cell| {
+                cell.plain_text()
+                    .chars()
+                    .filter(|ch| *ch != OBJECT_REPLACEMENT_CHAR)
+                    .collect()
+            })
+            .collect();
         lines.push(cells.join("\t"));
     }
     lines.join("\n")
@@ -2016,7 +2352,7 @@ fn table_to_markdown(table: &DocumentTable) -> String {
     let header: Vec<String> = table
         .rows
         .first()
-        .map(|row| row.iter().map(|cell| cell.plain_text()).collect())
+        .map(|row| row.iter().map(markdown_text_from_table_cell).collect())
         .unwrap_or_default();
     lines.push(format!("| {} |", header.join(" | ")));
 
@@ -2026,7 +2362,7 @@ fn table_to_markdown(table: &DocumentTable) -> String {
 
     // Data rows
     for row in table.rows.iter().skip(1) {
-        let cells: Vec<String> = row.iter().map(|cell| cell.plain_text()).collect();
+        let cells: Vec<String> = row.iter().map(markdown_text_from_table_cell).collect();
         // Pad if row has fewer cells
         let mut padded = cells;
         while padded.len() < num_cols {
@@ -2074,12 +2410,42 @@ fn table_to_html(table: &DocumentTable) -> String {
                     );
                 }
             }
+            for image in &cell.images {
+                if let Some(mime_type) = image_mime_type(&image.bytes) {
+                    let _ = write!(
+                        html,
+                        "<img class=\"image-block\" alt=\"{}\" src=\"data:{};base64,{}\" style=\"width:{}pt;height:{}pt;opacity:{:.3};\" />",
+                        html_escape(&image.alt_text),
+                        mime_type,
+                        BASE64_STANDARD.encode(&image.bytes),
+                        image.width_points,
+                        image.height_points,
+                        image.opacity.clamp(0.0, 1.0)
+                    );
+                }
+            }
             let _ = write!(html, "</{tag}>");
         }
         html.push_str("</tr>");
     }
     html.push_str("</table>");
     html
+}
+
+fn markdown_text_from_table_cell(cell: &TableCell) -> String {
+    let mut text = markdown_text_from_runs(&cell.runs);
+    for image in &cell.images {
+        let alt = if image.alt_text.is_empty() {
+            "Image"
+        } else {
+            &image.alt_text
+        };
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(&format!("![{alt}](embedded-image)"));
+    }
+    text
 }
 
 fn markdown_text_from_runs(runs: &[TextRun]) -> String {
@@ -2439,6 +2805,55 @@ mod tests {
             document.plain_text(),
             format!("alpha \n{OBJECT_REPLACEMENT_CHAR}\nbeta")
         );
+    }
+
+    #[test]
+    fn formats_empty_table_cell_and_uses_style_for_inserted_text() {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs("Test".to_owned(), Vec::new());
+        document.insert_table(0, 1, 1);
+        let table_id = document
+            .paragraph_tables
+            .iter()
+            .flatten()
+            .next()
+            .unwrap()
+            .id;
+
+        document.apply_style_to_table_cell(table_id, 0, 0, |style| {
+            style.bold = true;
+            style.font_size_points = 18.0;
+        });
+        let active_style = document.table_cell_typing_style(table_id, 0, 0).unwrap();
+        document.append_table_cell_text(table_id, 0, 0, "Styled", active_style);
+
+        let cell = &document.table_by_id(table_id).unwrap().rows[0][0];
+        assert_eq!(cell.plain_text(), "Styled");
+        assert!(cell.runs[0].style.bold);
+        assert_eq!(cell.runs[0].style.font_size_points, 18.0);
+    }
+
+    #[test]
+    fn inserts_image_into_table_cell() {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs("Test".to_owned(), Vec::new());
+        document.insert_table(0, 1, 1);
+        let table_id = document
+            .paragraph_tables
+            .iter()
+            .flatten()
+            .next()
+            .unwrap()
+            .id;
+
+        document.insert_table_cell_image(table_id, 0, 0, test_image(42), CharacterStyle::default());
+
+        let cell = &document.table_by_id(table_id).unwrap().rows[0][0];
+        assert_eq!(cell.images.len(), 1);
+        assert_eq!(cell.plain_text(), OBJECT_REPLACEMENT_CHAR.to_string());
+        assert!(document
+            .to_markdown()
+            .contains("![image-42](embedded-image)"));
     }
 
     #[test]
