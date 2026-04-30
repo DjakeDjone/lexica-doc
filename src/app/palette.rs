@@ -99,6 +99,7 @@ pub(super) fn configure_theme(ctx: &egui::Context, mode: ThemeMode, palette: The
     style.visuals.widgets.open = style.visuals.widgets.active;
     style.visuals.selection.bg_fill = palette.accent.gamma_multiply(0.35);
     style.visuals.selection.stroke = egui::Stroke::new(1.0, palette.accent);
+    style.visuals.text_cursor.stroke = egui::Stroke::new(2.0, egui::Color32::BLACK);
     style.visuals.panel_fill = palette.ribbon_bg;
     style.visuals.window_fill = palette.ribbon_group_bg;
     ctx.set_global_style(style);
