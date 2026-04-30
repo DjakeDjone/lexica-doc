@@ -693,6 +693,12 @@ fn paint_backstage_nav(
     let nav_muted = palette.title_muted;
     let active_bg = backstage_surface(palette);
     let active_fg = palette.tab_active_fg;
+    let nav_style = BackstageNavStyle {
+        selected_bg: active_bg,
+        selected_fg: active_fg,
+        normal_fg: nav_fg,
+        palette,
+    };
 
     egui::Frame::new()
         .fill(nav_bg)
@@ -707,16 +713,7 @@ fn paint_backstage_nav(
 
                 for section in BackstageSection::ALL {
                     let active = state.section == section;
-                    let response = backstage_nav_row(
-                        ui,
-                        section.label(),
-                        width,
-                        active,
-                        active_bg,
-                        active_fg,
-                        nav_fg,
-                        palette,
-                    );
+                    let response = backstage_nav_row(ui, section.label(), width, active, nav_style);
                     if response.clicked() {
                         match section {
                             BackstageSection::Save => output.save_requested = true,
@@ -1080,21 +1077,26 @@ fn paint_recent_files(
         });
 }
 
+#[derive(Clone, Copy)]
+struct BackstageNavStyle {
+    selected_bg: egui::Color32,
+    selected_fg: egui::Color32,
+    normal_fg: egui::Color32,
+    palette: ThemePalette,
+}
+
 fn backstage_nav_row(
     ui: &mut egui::Ui,
     label: &str,
     width: f32,
     selected: bool,
-    selected_bg: egui::Color32,
-    selected_fg: egui::Color32,
-    normal_fg: egui::Color32,
-    palette: ThemePalette,
+    style: BackstageNavStyle,
 ) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 36.0), egui::Sense::click());
     let fill = if selected {
-        selected_bg
+        style.selected_bg
     } else if response.hovered() {
-        palette.accent.gamma_multiply(0.18)
+        style.palette.accent.gamma_multiply(0.18)
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -1104,7 +1106,11 @@ fn backstage_nav_row(
         egui::Align2::LEFT_CENTER,
         label,
         egui::FontId::proportional(15.0),
-        if selected { selected_fg } else { normal_fg },
+        if selected {
+            style.selected_fg
+        } else {
+            style.normal_fg
+        },
     );
     response
 }

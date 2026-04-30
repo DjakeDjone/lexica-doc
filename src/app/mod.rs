@@ -1,13 +1,13 @@
 mod actions;
+mod canvas_state;
 mod chrome;
+mod history;
 mod palette;
+mod recent_files;
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::process::Child;
-#[cfg(not(target_arch = "wasm32"))]
-use std::{env, fs};
 
 use eframe::{egui, App, CreationContext, Frame};
 #[cfg(not(target_arch = "wasm32"))]
@@ -24,22 +24,27 @@ use crate::grammar::{
 };
 use crate::{
     canvas::{paint_document_canvas, CanvasOutput},
-    document::{CharacterStyle, DocumentState, ParagraphStyle},
+    document::DocumentState,
     grammar::{GrammarConfig, GrammarError, GrammarStatus},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
 use actions::open_document_from_path;
 use actions::{handle_global_shortcuts, open_document, save_document, save_document_as_with_name};
+pub use canvas_state::{
+    CanvasState, ImageMoveDrag, ImageResizeDrag, ResizeHandle, TableResizeDrag,
+    TableResizeHandleRect, TableResizeKind, ZoomMode,
+};
 use chrome::{
     paint_backstage, paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar,
     BackstageState, RibbonTab,
 };
+pub use history::ChangeHistory;
 use palette::{configure_theme, theme_palette};
+use recent_files::{load_recent_files, remember_recent_file};
 
 pub use palette::ThemeMode;
 
-const HISTORY_LIMIT: usize = 200;
 const DOCX_CARLITO: &str = "docx-carlito";
 const DOCX_CALADEA: &str = "docx-caladea";
 const DOCX_LIBERATION_SANS: &str = "docx-liberation-sans";
@@ -48,8 +53,6 @@ const DOCX_LIBERATION_MONO: &str = "docx-liberation-mono";
 const DOCX_COMIC_SANS: &str = "docx-comic-sans";
 #[cfg(not(target_arch = "wasm32"))]
 const GRAMMAR_QUEUE_CAPACITY: usize = 8;
-#[cfg(not(target_arch = "wasm32"))]
-const RECENT_FILES_LIMIT: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GrammarDownloadStatus {
@@ -62,291 +65,6 @@ enum GrammarDownloadStatus {
 enum GrammarDownloadResult {
     Ready(PathBuf),
     Failed(String),
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn recent_files_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .map(|path| path.join("wors").join("recent-files.json"))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        env::var_os("HOME").map(PathBuf::from).map(|path| {
-            path.join("Library")
-                .join("Application Support")
-                .join("wors")
-                .join("recent-files.json")
-        })
-    }
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    {
-        if let Some(config_home) = env::var_os("XDG_CONFIG_HOME") {
-            Some(
-                PathBuf::from(config_home)
-                    .join("wors")
-                    .join("recent-files.json"),
-            )
-        } else {
-            env::var_os("HOME")
-                .map(PathBuf::from)
-                .map(|path| path.join(".config").join("wors").join("recent-files.json"))
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn normalize_recent_path(path: PathBuf) -> PathBuf {
-    path.canonicalize().unwrap_or(path)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn normalize_recent_path(path: PathBuf) -> PathBuf {
-    path
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn load_recent_files() -> Vec<PathBuf> {
-    let Some(path) = recent_files_path() else {
-        return Vec::new();
-    };
-    let Ok(source) = fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let Ok(raw_paths) = serde_json::from_str::<Vec<String>>(&source) else {
-        return Vec::new();
-    };
-    let mut recent_files = Vec::new();
-    for raw_path in raw_paths {
-        let path = normalize_recent_path(PathBuf::from(raw_path));
-        if path.exists() && !recent_files.contains(&path) {
-            recent_files.push(path);
-        }
-        if recent_files.len() >= RECENT_FILES_LIMIT {
-            break;
-        }
-    }
-    recent_files
-}
-
-#[cfg(target_arch = "wasm32")]
-fn load_recent_files() -> Vec<PathBuf> {
-    Vec::new()
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_recent_files(recent_files: &[PathBuf]) {
-    let Some(path) = recent_files_path() else {
-        return;
-    };
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let raw_paths: Vec<String> = recent_files
-        .iter()
-        .filter(|path| path.exists())
-        .map(|path| path.display().to_string())
-        .collect();
-    if let Ok(json) = serde_json::to_string_pretty(&raw_paths) {
-        let _ = fs::write(path, json);
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn save_recent_files(_recent_files: &[PathBuf]) {}
-
-pub struct ChangeHistory {
-    undo_stack: Vec<DocumentState>,
-    redo_stack: Vec<DocumentState>,
-    last_checkpoint_time: f64,
-}
-
-impl ChangeHistory {
-    pub fn new() -> Self {
-        Self {
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            last_checkpoint_time: f64::NEG_INFINITY,
-        }
-    }
-
-    fn push_snapshot(&mut self, document: &DocumentState) {
-        self.undo_stack.push(document.clone());
-        self.redo_stack.clear();
-        if self.undo_stack.len() > HISTORY_LIMIT {
-            self.undo_stack.remove(0);
-        }
-    }
-
-    /// Always checkpoint — use before discrete actions (button clicks).
-    pub fn checkpoint(&mut self, document: &DocumentState, now: f64) {
-        self.push_snapshot(document);
-        self.last_checkpoint_time = now;
-    }
-
-    /// Checkpoint only if enough time has elapsed — use before continuous controls (drag values).
-    pub fn checkpoint_coalesced(&mut self, document: &DocumentState, now: f64) {
-        if now - self.last_checkpoint_time > 0.75 {
-            self.push_snapshot(document);
-            self.last_checkpoint_time = now;
-        }
-    }
-
-    pub fn undo(&mut self, document: &mut DocumentState) -> bool {
-        if let Some(prev) = self.undo_stack.pop() {
-            self.redo_stack.push(document.clone());
-            if self.redo_stack.len() > HISTORY_LIMIT {
-                self.redo_stack.remove(0);
-            }
-            *document = prev;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn redo(&mut self, document: &mut DocumentState) -> bool {
-        if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(document.clone());
-            if self.undo_stack.len() > HISTORY_LIMIT {
-                self.undo_stack.remove(0);
-            }
-            *document = next;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
-    }
-
-    pub fn clear(&mut self) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ResizeHandle {
-    NW,
-    N,
-    NE,
-    E,
-    SE,
-    S,
-    SW,
-    W,
-}
-
-pub struct ImageResizeDrag {
-    pub image_id: usize,
-    pub handle: ResizeHandle,
-    pub start_ptr: egui::Pos2,
-    pub start_width_points: f32,
-    pub start_height_points: f32,
-    pub start_x_points: f32,
-    pub start_y_points: f32,
-}
-
-pub struct ImageMoveDrag {
-    pub image_id: usize,
-    pub start_ptr: egui::Pos2,
-    pub current_ptr: egui::Pos2,
-    pub start_rect: egui::Rect,
-    pub start_x_points: f32,
-    pub start_y_points: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TableResizeKind {
-    Column { left_col: usize },
-    Row { top_row: usize },
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct TableResizeHandleRect {
-    pub table_id: usize,
-    pub kind: TableResizeKind,
-    pub rect: egui::Rect,
-}
-
-pub struct TableResizeDrag {
-    pub table_id: usize,
-    pub kind: TableResizeKind,
-    pub start_ptr: egui::Pos2,
-    pub first_points: f32,
-    pub second_points: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ZoomMode {
-    Manual,
-    FitPage,
-}
-
-pub struct CanvasState {
-    pub zoom: f32,
-    pub zoom_mode: ZoomMode,
-    pub imported_docx_view: bool,
-    pub pan: egui::Vec2,
-    pub selection: egui::text_selection::CCursorRange,
-    pub active_style: CharacterStyle,
-    pub active_paragraph_style: ParagraphStyle,
-    pub last_interaction_time: f64,
-    pub image_textures: HashMap<usize, egui::TextureHandle>,
-    pub selected_image_id: Option<usize>,
-    pub image_rects: Vec<(usize, egui::Rect)>,
-    pub resize_drag: Option<ImageResizeDrag>,
-    pub move_drag: Option<ImageMoveDrag>,
-    pub active_table_cell: Option<(usize, usize, usize)>,
-    pub table_cell_rects: Vec<(usize, usize, usize, egui::Rect)>,
-    pub table_cell_content_rects: Vec<(usize, usize, usize, egui::Rect)>,
-    pub table_cell_selection: egui::text_selection::CCursorRange,
-    pub table_resize_handles: Vec<TableResizeHandleRect>,
-    pub table_resize_drag: Option<TableResizeDrag>,
-}
-
-impl Default for CanvasState {
-    fn default() -> Self {
-        Self {
-            zoom: 1.0,
-            zoom_mode: ZoomMode::Manual,
-            imported_docx_view: false,
-            pan: egui::Vec2::ZERO,
-            selection: egui::text_selection::CCursorRange::default(),
-            active_style: CharacterStyle::default(),
-            active_paragraph_style: ParagraphStyle::default(),
-            last_interaction_time: 0.0,
-            image_textures: HashMap::new(),
-            selected_image_id: None,
-            image_rects: Vec::new(),
-            resize_drag: None,
-            move_drag: None,
-            active_table_cell: None,
-            table_cell_rects: Vec::new(),
-            table_cell_content_rects: Vec::new(),
-            table_cell_selection: egui::text_selection::CCursorRange::default(),
-            table_resize_handles: Vec::new(),
-            table_resize_drag: None,
-        }
-    }
-}
-
-impl Default for ChangeHistory {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 pub struct WorsApp {
@@ -478,17 +196,7 @@ impl WorsApp {
     }
 
     fn remember_recent_file(&mut self, path: PathBuf) {
-        if path.as_os_str().is_empty() {
-            return;
-        }
-        let path = normalize_recent_path(path);
-        if self.recent_files.first() == Some(&path) {
-            return;
-        }
-        self.recent_files.retain(|recent| recent != &path);
-        self.recent_files.insert(0, path.clone());
-        self.recent_files.truncate(12);
-        save_recent_files(&self.recent_files);
+        remember_recent_file(&mut self.recent_files, path);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

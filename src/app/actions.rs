@@ -36,12 +36,9 @@ pub(super) fn open_document(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some(path) = FileDialog::new()
+        let path = FileDialog::new()
             .add_filter("supported", &["txt", "md", "markdown", "docx"])
-            .pick_file()
-        else {
-            return None;
-        };
+            .pick_file()?;
         open_document_from_path(
             document,
             canvas,
@@ -129,10 +126,7 @@ pub(super) fn save_document(
     {
         let path = match current_path.clone() {
             Some(path) => path,
-            None => match pick_save_path(document) {
-                Some(path) => path,
-                None => return None,
-            },
+            None => pick_save_path(document)?,
         };
 
         match document.save_to_path(&path) {
@@ -171,9 +165,7 @@ pub(super) fn save_document_as(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some(path) = pick_save_path(document) else {
-            return None;
-        };
+        let path = pick_save_path(document)?;
 
         match document.save_to_path(&path) {
             Ok(()) => {
@@ -215,9 +207,7 @@ pub(super) fn save_document_as_with_name(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some(path) = pick_save_path_with_file_name(&suggested_name) else {
-            return None;
-        };
+        let path = pick_save_path_with_file_name(&suggested_name)?;
 
         match document.save_to_path(&path) {
             Ok(()) => {
