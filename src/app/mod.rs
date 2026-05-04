@@ -4,6 +4,7 @@ mod chrome;
 mod history;
 mod palette;
 mod recent_files;
+mod settings;
 
 use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,6 +43,7 @@ use chrome::{
 pub use history::ChangeHistory;
 use palette::{configure_theme, theme_palette};
 use recent_files::{load_recent_files, remember_recent_file};
+use settings::{load_settings, save_settings, AppSettings};
 
 pub use palette::ThemeMode;
 
@@ -105,7 +107,11 @@ impl WorsApp {
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
         configure_docx_fonts(&cc.egui_ctx);
 
-        let theme_mode = ThemeMode::Light;
+        let mut theme_mode = ThemeMode::Light;
+        let mut canvas = CanvasState::default();
+        if let Some(settings) = load_settings(cc.storage) {
+            settings.apply(&mut theme_mode, &mut canvas);
+        }
         configure_theme(&cc.egui_ctx, theme_mode, theme_palette(theme_mode));
 
         let logo_texture = {
@@ -157,7 +163,7 @@ impl WorsApp {
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut app = Self {
             document: DocumentState::bootstrap(),
-            canvas: CanvasState::default(),
+            canvas,
             history: ChangeHistory::new(),
             active_tab: RibbonTab::Home,
             theme_mode,
@@ -490,9 +496,17 @@ fn register_font(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'static 
 }
 
 impl App for WorsApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut Frame) {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        save_settings(
+            storage,
+            AppSettings::from_state(self.theme_mode, &self.canvas),
+        );
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut Frame) {
         self.poll_grammar_results();
         self.poll_grammar_download();
+        let initial_settings = AppSettings::from_state(self.theme_mode, &self.canvas);
 
         let shortcut_changed = handle_global_shortcuts(
             ui,
@@ -762,6 +776,13 @@ impl App for WorsApp {
                             self.show_grammar_warning = false;
                         }
                     });
+            }
+        }
+
+        let current_settings = AppSettings::from_state(self.theme_mode, &self.canvas);
+        if current_settings != initial_settings {
+            if let Some(storage) = frame.storage_mut() {
+                save_settings(storage, current_settings);
             }
         }
     }
