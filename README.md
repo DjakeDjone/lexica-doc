@@ -4,6 +4,37 @@ Minimal desktop document editor built with Rust + `eframe/egui`.
 
 ## Install
 
+### Prebuilt Binaries
+
+The GitHub workflow builds Linux and Windows desktop binaries on each push to `main`,
+for pull requests, and when run manually.
+
+1. Open the latest successful **Build desktop app** run in GitHub Actions.
+2. Download the artifact for your platform:
+   - `wors-linux-x86_64`
+   - `wors-windows-x86_64`
+3. Extract the downloaded `.zip` archive.
+
+Linux:
+
+```bash
+unzip wors-linux-x86_64.zip -d wors-linux-x86_64
+chmod +x wors-linux-x86_64/wors
+mkdir -p "$HOME/.local/bin"
+mv wors-linux-x86_64/wors "$HOME/.local/bin/wors"
+```
+
+Windows (PowerShell):
+
+```powershell
+Expand-Archive .\wors-windows-x86_64.zip -DestinationPath .
+.\wors-windows-x86_64\wors.exe
+```
+
+Move `wors.exe` to a directory on your `PATH` if you want to run it from any terminal.
+
+### Build From Source Installer
+
 Linux:
 
 ```bash
