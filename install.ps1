@@ -1,5 +1,6 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "Continue"
 
 $repoOwner = if ($env:REPO_OWNER) { $env:REPO_OWNER } else { "DjakeDjone" }
 $repoName = if ($env:REPO_NAME) { $env:REPO_NAME } else { "lexica-doc" }

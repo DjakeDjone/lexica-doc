@@ -1,5 +1,6 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "Continue"
 
 $repoOwner = if ($env:REPO_OWNER) { $env:REPO_OWNER } else { "DjakeDjone" }
 $repoName = if ($env:REPO_NAME) { $env:REPO_NAME } else { "lexica-doc" }
@@ -65,11 +66,29 @@ try {
             throw "error: no successful workflow runs found"
         }
 
+        $artifactZip = Join-Path $tmpDir "$artifactName.zip"
         Write-Host "Downloading $artifactName"
-        & gh run download $run.databaseId --repo "$repoOwner/$repoName" --name $artifactName --dir $extractDir
+        $artifactJson = & gh api "repos/$repoOwner/$repoName/actions/runs/$($run.databaseId)/artifacts"
         if ($LASTEXITCODE -ne 0) {
-            throw "error: gh run download failed"
+            throw "error: gh api artifacts lookup failed"
         }
+
+        $artifact = ($artifactJson | ConvertFrom-Json).artifacts | Where-Object { $_.name -eq $artifactName -and -not $_.expired } | Select-Object -First 1
+        if (-not $artifact) {
+            throw "error: artifact '$artifactName' not found or has expired"
+        }
+
+        $token = & gh auth token
+        if ($LASTEXITCODE -ne 0 -or -not $token) {
+            throw "error: gh auth token failed"
+        }
+
+        $downloadHeaders = @{
+            Accept = "application/vnd.github+json"
+            Authorization = "Bearer $token"
+        }
+        Invoke-WebRequest -Uri $artifact.archive_download_url -Headers $downloadHeaders -OutFile $artifactZip
+        Expand-Archive -LiteralPath $artifactZip -DestinationPath $extractDir
     }
     else {
         if (-not $githubToken) {

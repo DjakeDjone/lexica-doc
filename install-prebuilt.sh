@@ -30,6 +30,7 @@ fi
 
 api_root="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}"
 github_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+curl_progress=(-fL --progress-bar)
 tmp_dir="$(mktemp -d)"
 cleanup() {
   rm -rf "$tmp_dir"
@@ -62,10 +63,22 @@ if command -v gh >/dev/null 2>&1; then
   fi
 
   echo "Downloading ${ARTIFACT_NAME}"
-  gh run download "$run_id" \
-    --repo "${REPO_OWNER}/${REPO_NAME}" \
-    --name "$ARTIFACT_NAME" \
-    --dir "$extract_dir"
+  artifact_url="$(gh api \
+    "repos/${REPO_OWNER}/${REPO_NAME}/actions/runs/${run_id}/artifacts" \
+    --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\" and .expired == false) | .archive_download_url" \
+    | head -n 1)"
+
+  if [[ -z "$artifact_url" ]]; then
+    echo "error: artifact '${ARTIFACT_NAME}' not found or has expired" >&2
+    exit 1
+  fi
+
+  curl "${curl_progress[@]}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer $(gh auth token)" \
+    "$artifact_url" \
+    -o "$artifact_zip"
+  unzip -q "$artifact_zip" -d "$extract_dir"
 else
   if [[ -z "$github_token" ]]; then
     echo "error: install-prebuilt.sh requires gh or GH_TOKEN/GITHUB_TOKEN to download GitHub Actions artifacts" >&2
@@ -115,7 +128,7 @@ PY
   )"
 
   echo "Downloading ${ARTIFACT_NAME}"
-  curl -fL "${curl_headers[@]}" "$download_url" -o "$artifact_zip"
+  curl "${curl_progress[@]}" "${curl_headers[@]}" "$download_url" -o "$artifact_zip"
   unzip -q "$artifact_zip" -d "$extract_dir"
 fi
 

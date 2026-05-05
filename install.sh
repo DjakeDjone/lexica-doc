@@ -40,7 +40,7 @@ source_root="${tmp_dir}/${REPO_NAME}-${BRANCH}"
 crate_dir="$source_root"
 
 echo "Downloading ${archive_url}"
-curl -fsSL "$archive_url" -o "$archive_file"
+curl -fL --progress-bar "$archive_url" -o "$archive_file"
 tar -xzf "$archive_file" -C "$tmp_dir"
 
 if [[ ! -f "${crate_dir}/Cargo.toml" && -f "${source_root}/browser/Cargo.toml" ]]; then
