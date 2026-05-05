@@ -14,7 +14,7 @@ use crate::{
     layout::document_points_to_screen_points,
 };
 
-use super::{image_display_size, texture_for_image};
+use super::image::{image_display_size, texture_for_image};
 
 pub(super) struct TablePaintGeometry {
     pub(super) cell_rects: Vec<(usize, usize, usize, Rect)>,

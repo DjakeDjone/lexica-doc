@@ -1,4 +1,5 @@
 mod actions;
+mod backstage;
 mod canvas_state;
 mod chrome;
 mod history;
@@ -36,14 +37,12 @@ use crate::{
 #[cfg(not(target_arch = "wasm32"))]
 use actions::open_document_from_path;
 use actions::{handle_global_shortcuts, open_document, save_document, save_document_as_with_name};
+use backstage::{paint_backstage, BackstageOutput, BackstageState};
 pub use canvas_state::{
     CanvasState, ImageMoveDrag, ImageResizeDrag, ResizeHandle, TableResizeDrag,
     TableResizeHandleRect, TableResizeKind, ZoomMode,
 };
-use chrome::{
-    paint_backstage, paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar,
-    BackstageState, RibbonTab,
-};
+use chrome::{paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar, RibbonTab};
 pub use history::ChangeHistory;
 use palette::{configure_theme, theme_palette};
 use recent_files::{load_recent_files, remember_recent_file};
@@ -637,7 +636,7 @@ impl App for WorsApp {
         let mut grammar_ribbon_output = chrome::GrammarRibbonOutput::default();
         let mut canvas_output = CanvasOutput::default();
         if self.backstage.visible {
-            let mut backstage_output = chrome::BackstageOutput::default();
+            let mut backstage_output = BackstageOutput::default();
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(palette.workspace_bg))
                 .show_inside(ui, |ui| {
