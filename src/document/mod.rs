@@ -474,6 +474,17 @@ impl TableCell {
         self.typing_style()
     }
 
+    fn selection_style_at(&self, range: Range<usize>) -> CharacterStyle {
+        let total_chars = self.total_chars();
+        let start = range.start.min(total_chars);
+        let end = range.end.min(total_chars);
+        if start < end {
+            return self.style_at(end - 1);
+        }
+
+        self.style_at(start)
+    }
+
     fn append_text(&mut self, text: &str, style: CharacterStyle) {
         self.insert_text(self.total_chars(), text, style);
     }
@@ -812,6 +823,17 @@ impl DocumentState {
         }
 
         self.style_at(cursor_index)
+    }
+
+    pub fn selection_style_at(&self, range: Range<usize>) -> CharacterStyle {
+        let total_chars = self.total_chars();
+        let start = range.start.min(total_chars);
+        let end = range.end.min(total_chars);
+        if start < end {
+            return self.style_at(end - 1);
+        }
+
+        self.typing_style_at(start)
     }
 
     pub fn paragraph_style_at(&self, char_index: usize) -> ParagraphStyle {
@@ -1557,6 +1579,19 @@ impl DocumentState {
             .map(|cell| cell.style_at(char_index))
     }
 
+    pub fn table_cell_selection_style_at(
+        &self,
+        table_id: usize,
+        row: usize,
+        col: usize,
+        range: Range<usize>,
+    ) -> Option<CharacterStyle> {
+        self.table_by_id(table_id)
+            .and_then(|table| table.rows.get(row))
+            .and_then(|cells| cells.get(col))
+            .map(|cell| cell.selection_style_at(range))
+    }
+
     pub fn table_cell_len(&self, table_id: usize, row: usize, col: usize) -> Option<usize> {
         self.table_by_id(table_id)
             .and_then(|table| table.rows.get(row))
@@ -2018,6 +2053,30 @@ mod tests {
             imported_family.font_id.family,
             eframe::egui::FontFamily::Name(DOCX_CARLITO_BOLD.into())
         );
+    }
+
+    #[test]
+    fn selected_style_uses_last_selected_character_at_run_boundary() {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs(
+            "Test".to_owned(),
+            vec![
+                super::TextRun {
+                    text: "Bold".to_owned(),
+                    style: CharacterStyle {
+                        bold: true,
+                        ..CharacterStyle::default()
+                    },
+                },
+                super::TextRun {
+                    text: " plain".to_owned(),
+                    style: CharacterStyle::default(),
+                },
+            ],
+        );
+
+        assert!(document.selection_style_at(0..4).bold);
+        assert!(!document.selection_style_at(0..5).bold);
     }
 
     #[test]

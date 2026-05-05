@@ -683,11 +683,11 @@ pub(super) fn set_highlight_color(
 
 pub(super) fn sync_active_style(document: &DocumentState, canvas: &mut CanvasState) {
     if let Some((table_id, row, col)) = canvas.active_table_cell {
-        if let Some(style) = document.table_cell_style_at(
+        if let Some(style) = document.table_cell_selection_style_at(
             table_id,
             row,
             col,
-            canvas.table_cell_selection.primary.index,
+            canvas.table_cell_selection.as_sorted_char_range(),
         ) {
             canvas.active_style = style;
         }
@@ -695,13 +695,8 @@ pub(super) fn sync_active_style(document: &DocumentState, canvas: &mut CanvasSta
     }
 
     let range = canvas.selection.as_sorted_char_range();
-    let cursor_index = if range.start < range.end {
-        range.end
-    } else {
-        canvas.selection.primary.index
-    };
-    canvas.active_style = document.typing_style_at(cursor_index);
-    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+    canvas.active_style = document.selection_style_at(range.clone());
+    canvas.active_paragraph_style = document.paragraph_style_at(canvas.selection.primary.index);
 }
 
 pub(super) fn set_paragraph_alignment(
