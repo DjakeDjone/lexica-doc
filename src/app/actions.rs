@@ -37,7 +37,7 @@ pub(super) fn open_document(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let path = FileDialog::new()
-            .add_filter("supported", &["txt", "md", "markdown", "docx"])
+            .add_filter("supported", &["txt", "md", "markdown", "docx", "odt"])
             .pick_file()?;
         open_document_from_path(
             document,
@@ -62,20 +62,22 @@ pub(super) fn open_document_from_path(
 ) -> bool {
     match DocumentState::load_from_path(path) {
         Ok(new_document) => {
-            let imported_docx =
-                matches!(path.extension().and_then(|ext| ext.to_str()), Some("docx"));
+            let imported_document = matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some("docx" | "odt")
+            );
             history.clear();
             *document = new_document;
             canvas.selection = egui::text_selection::CCursorRange::default();
             canvas.active_style = CharacterStyle::default();
             canvas.active_paragraph_style = ParagraphStyle::default();
             canvas.zoom = 1.0;
-            canvas.zoom_mode = if imported_docx {
+            canvas.zoom_mode = if imported_document {
                 ZoomMode::FitPage
             } else {
                 ZoomMode::Manual
             };
-            canvas.imported_docx_view = imported_docx;
+            canvas.imported_docx_view = imported_document;
             canvas.pan = egui::Vec2::ZERO;
             canvas.image_textures.clear();
             canvas.selected_image_id = None;
@@ -239,6 +241,7 @@ fn pick_save_path_with_file_name(file_name: &str) -> Option<PathBuf> {
         .add_filter("text", &["txt"])
         .add_filter("markdown", &["md", "markdown"])
         .add_filter("web (formatted)", &["html", "htm"])
+        .add_filter("OpenDocument text", &["odt"])
         .add_filter("pdf", &["pdf"])
         .set_file_name(file_name)
         .save_file()
@@ -303,6 +306,7 @@ fn mime_type_for_extension(extension: &str) -> &'static str {
         "txt" => "text/plain;charset=utf-8",
         "pdf" => "application/pdf",
         "html" | "htm" => "text/html;charset=utf-8",
+        "odt" => "application/vnd.oasis.opendocument.text",
         _ => "application/octet-stream",
     }
 }

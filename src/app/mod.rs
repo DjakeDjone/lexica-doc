@@ -25,7 +25,11 @@ use crate::grammar::{
 };
 use crate::{
     canvas::{paint_document_canvas, CanvasOutput},
-    document::DocumentState,
+    document::{
+        DocumentState, DOCX_BODY_BOLD, DOCX_CALADEA_BOLD, DOCX_CARLITO_BOLD, DOCX_COMIC_SANS_BOLD,
+        DOCX_LIBERATION_MONO_BOLD, DOCX_LIBERATION_SANS_BOLD, DOCX_LIBERATION_SERIF_BOLD,
+        DOCX_MONOSPACE_BOLD,
+    },
     grammar::{GrammarConfig, GrammarError, GrammarStatus},
 };
 
@@ -483,6 +487,54 @@ fn configure_docx_fonts(ctx: &egui::Context) {
         DOCX_COMIC_SANS,
         include_bytes!("../../assets/fonts/ComicNeue-Regular.ttf"),
     );
+    register_font_with_fallback(
+        &mut fonts,
+        DOCX_BODY_BOLD,
+        include_bytes!("../../assets/fonts/LiberationSans-Bold.ttf"),
+        &[DOCX_LIBERATION_SANS],
+    );
+    register_font_with_fallback(
+        &mut fonts,
+        DOCX_MONOSPACE_BOLD,
+        include_bytes!("../../assets/fonts/LiberationMono-Bold.ttf"),
+        &[DOCX_LIBERATION_MONO],
+    );
+    register_font_with_fallback(
+        &mut fonts,
+        DOCX_CARLITO_BOLD,
+        include_bytes!("../../assets/fonts/Carlito-Bold.ttf"),
+        &[DOCX_CARLITO],
+    );
+    register_font_with_fallback(
+        &mut fonts,
+        DOCX_CALADEA_BOLD,
+        include_bytes!("../../assets/fonts/Caladea-Bold.ttf"),
+        &[DOCX_CALADEA],
+    );
+    register_font_with_fallback(
+        &mut fonts,
+        DOCX_LIBERATION_SANS_BOLD,
+        include_bytes!("../../assets/fonts/LiberationSans-Bold.ttf"),
+        &[DOCX_LIBERATION_SANS],
+    );
+    register_font_with_fallback(
+        &mut fonts,
+        DOCX_LIBERATION_SERIF_BOLD,
+        include_bytes!("../../assets/fonts/LiberationSerif-Bold.ttf"),
+        &[DOCX_LIBERATION_SERIF],
+    );
+    register_font_with_fallback(
+        &mut fonts,
+        DOCX_LIBERATION_MONO_BOLD,
+        include_bytes!("../../assets/fonts/LiberationMono-Bold.ttf"),
+        &[DOCX_LIBERATION_MONO],
+    );
+    register_font_with_fallback(
+        &mut fonts,
+        DOCX_COMIC_SANS_BOLD,
+        include_bytes!("../../assets/fonts/ComicNeue-Bold.ttf"),
+        &[DOCX_COMIC_SANS],
+    );
     ctx.set_fonts(fonts);
 }
 
@@ -493,6 +545,22 @@ fn register_font(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'static 
     fonts
         .families
         .insert(egui::FontFamily::Name(name.into()), vec![name.to_owned()]);
+}
+
+fn register_font_with_fallback(
+    fonts: &mut egui::FontDefinitions,
+    name: &str,
+    bytes: &'static [u8],
+    fallback_names: &[&str],
+) {
+    fonts
+        .font_data
+        .insert(name.to_owned(), egui::FontData::from_static(bytes).into());
+    let mut family = vec![name.to_owned()];
+    family.extend(fallback_names.iter().map(|fallback| fallback.to_string()));
+    fonts
+        .families
+        .insert(egui::FontFamily::Name(name.into()), family);
 }
 
 impl App for WorsApp {

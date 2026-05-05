@@ -103,17 +103,19 @@ pub(super) enum SaveFormat {
     Text,
     Markdown,
     Html,
+    Odt,
     Pdf,
 }
 
 impl SaveFormat {
-    const ALL: [Self; 4] = [Self::Text, Self::Markdown, Self::Html, Self::Pdf];
+    const ALL: [Self; 5] = [Self::Text, Self::Markdown, Self::Html, Self::Odt, Self::Pdf];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Text => "Plain Text (*.txt)",
             Self::Markdown => "Markdown (*.md)",
             Self::Html => "Web Page (*.html)",
+            Self::Odt => "OpenDocument Text (*.odt)",
             Self::Pdf => "PDF (*.pdf)",
         }
     }
@@ -123,6 +125,7 @@ impl SaveFormat {
             Self::Text => "txt",
             Self::Markdown => "md",
             Self::Html => "html",
+            Self::Odt => "odt",
             Self::Pdf => "pdf",
         }
     }
@@ -136,6 +139,7 @@ impl SaveFormat {
             "txt" => Some(Self::Text),
             "md" | "markdown" => Some(Self::Markdown),
             "html" | "htm" => Some(Self::Html),
+            "odt" => Some(Self::Odt),
             "pdf" => Some(Self::Pdf),
             _ => None,
         }
@@ -554,7 +558,7 @@ pub(super) fn paint_ribbon(
                     ribbon_info_group(
                         ui,
                         "Insert",
-                        "Import supports .txt, .md, .markdown, and .docx with images.",
+                        "Import supports .txt, .md, .markdown, .docx, and .odt with images.",
                         palette,
                     );
                 }

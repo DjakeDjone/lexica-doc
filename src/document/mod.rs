@@ -1,14 +1,12 @@
 pub mod docx;
 mod markdown;
+mod odt;
 mod text;
 
 use std::{collections::BTreeMap, fmt::Write as _, fs, ops::Range, path::Path};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use eframe::egui::{
-    epaint::text::{TextFormat, VariationCoords},
-    Color32, FontFamily, FontId, Stroke,
-};
+use eframe::egui::{epaint::text::TextFormat, Color32, FontFamily, FontId, Stroke};
 use printpdf::{
     Base64OrRaw, BuiltinFont, GeneratePdfOptions, Op, PdfDocument, PdfFontHandle, PdfPage,
     PdfSaveOptions, Point, Pt, TextItem,
@@ -17,11 +15,20 @@ use serde::Serialize;
 
 use docx::docx_to_document;
 use markdown::markdown_to_runs;
+use odt::{document_to_odt, odt_to_document};
 use text::{char_to_byte_index, line_char_range, slice_char_range, word_char_range};
 
 pub const OBJECT_REPLACEMENT_CHAR: char = '\u{fffc}';
+pub(crate) const DOCX_BODY_BOLD: &str = "docx-body-bold";
+pub(crate) const DOCX_MONOSPACE_BOLD: &str = "docx-monospace-bold";
+pub(crate) const DOCX_CARLITO_BOLD: &str = "docx-carlito-bold";
+pub(crate) const DOCX_CALADEA_BOLD: &str = "docx-caladea-bold";
+pub(crate) const DOCX_LIBERATION_SANS_BOLD: &str = "docx-liberation-sans-bold";
+pub(crate) const DOCX_LIBERATION_SERIF_BOLD: &str = "docx-liberation-serif-bold";
+pub(crate) const DOCX_LIBERATION_MONO_BOLD: &str = "docx-liberation-mono-bold";
+pub(crate) const DOCX_COMIC_SANS_BOLD: &str = "docx-comic-sans-bold";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum FontChoice {
     Proportional,
     Monospace,
@@ -71,6 +78,19 @@ impl FontChoice {
         }
     }
 
+    pub fn bold_family(self) -> FontFamily {
+        match self {
+            Self::Proportional => FontFamily::Name(DOCX_BODY_BOLD.into()),
+            Self::Monospace => FontFamily::Name(DOCX_MONOSPACE_BOLD.into()),
+            Self::Carlito => FontFamily::Name(DOCX_CARLITO_BOLD.into()),
+            Self::Caladea => FontFamily::Name(DOCX_CALADEA_BOLD.into()),
+            Self::LiberationSans => FontFamily::Name(DOCX_LIBERATION_SANS_BOLD.into()),
+            Self::LiberationSerif => FontFamily::Name(DOCX_LIBERATION_SERIF_BOLD.into()),
+            Self::LiberationMono => FontFamily::Name(DOCX_LIBERATION_MONO_BOLD.into()),
+            Self::ComicSans => FontFamily::Name(DOCX_COMIC_SANS_BOLD.into()),
+        }
+    }
+
     pub const fn family_name(self) -> Option<&'static str> {
         match self {
             Self::Proportional | Self::Monospace => None,
@@ -107,7 +127,7 @@ impl FontChoice {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum ParagraphAlignment {
     Left,
     Center,
@@ -1243,6 +1263,28 @@ impl DocumentState {
                 document.ensure_paragraph_style_count();
                 return Ok(document);
             }
+            "odt" => {
+                let imported = odt_to_document(
+                    &fs::read(path)
+                        .map_err(|error| format!("failed to read {}: {error}", path.display()))?,
+                )?;
+
+                let mut document = Self::bootstrap();
+                document.title = title;
+                document.runs = imported.runs;
+                document.paragraph_styles = imported.paragraph_styles;
+                document.paragraph_images = imported.paragraph_images;
+                document.paragraph_tables = imported.paragraph_tables;
+                if let Some(page_size) = imported.page_size {
+                    document.page_size = page_size;
+                }
+                if let Some(margins) = imported.margins {
+                    document.margins = margins;
+                }
+                document.normalize_runs();
+                document.ensure_paragraph_style_count();
+                return Ok(document);
+            }
             "md" | "markdown" => {
                 let source = fs::read_to_string(path)
                     .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
@@ -1285,8 +1327,9 @@ impl DocumentState {
             "txt" | "" => Ok(self.to_plain_text_export().into_bytes()),
             "html" | "htm" => Ok(self.to_html().into_bytes()),
             "pdf" => self.to_pdf_bytes(),
+            "odt" => document_to_odt(self),
             other => Err(format!(
-                "saving .{other} is not supported yet; use .txt, .md, .html, or .pdf"
+                "saving .{other} is not supported yet; use .txt, .md, .html, .odt, or .pdf"
             )),
         }
     }
@@ -2329,30 +2372,13 @@ impl PageMargins {
 }
 
 pub(crate) fn text_format(style: CharacterStyle, zoom: f32) -> TextFormat {
-    let mut coords = VariationCoords::default();
-    if style.bold {
-        coords.push("wght", 700.0);
-    }
-
     let line_color = style.text_color;
-    let font_size = if style.bold {
-        (style.font_size_points + 0.8) * zoom
-    } else {
-        style.font_size_points * zoom
-    };
-
-    let family = match style.font_family_name {
-        Some(name) => FontFamily::Name(name.into()),
-        None => style.font_choice.family(),
-    };
+    let font_size = style.font_size_points * zoom;
+    let family = text_font_family(style);
 
     TextFormat {
         font_id: FontId::new(font_size, family),
-        color: if style.bold {
-            style.text_color.gamma_multiply(0.88)
-        } else {
-            style.text_color
-        },
+        color: style.text_color,
         background: style.highlight_color,
         italics: style.italic,
         underline: if style.underline {
@@ -2365,8 +2391,27 @@ pub(crate) fn text_format(style: CharacterStyle, zoom: f32) -> TextFormat {
         } else {
             Stroke::NONE
         },
-        coords,
         ..Default::default()
+    }
+}
+
+fn text_font_family(style: CharacterStyle) -> FontFamily {
+    if style.bold {
+        return match style.font_family_name {
+            Some("docx-carlito") => FontFamily::Name(DOCX_CARLITO_BOLD.into()),
+            Some("docx-caladea") => FontFamily::Name(DOCX_CALADEA_BOLD.into()),
+            Some("docx-liberation-sans") => FontFamily::Name(DOCX_LIBERATION_SANS_BOLD.into()),
+            Some("docx-liberation-serif") => FontFamily::Name(DOCX_LIBERATION_SERIF_BOLD.into()),
+            Some("docx-liberation-mono") => FontFamily::Name(DOCX_LIBERATION_MONO_BOLD.into()),
+            Some("docx-comic-sans") => FontFamily::Name(DOCX_COMIC_SANS_BOLD.into()),
+            Some(name) => FontFamily::Name(name.into()),
+            None => style.font_choice.bold_family(),
+        };
+    }
+
+    match style.font_family_name {
+        Some(name) => FontFamily::Name(name.into()),
+        None => style.font_choice.family(),
     }
 }
 
@@ -2790,8 +2835,9 @@ mod tests {
     };
 
     use super::{
-        plain_text_from_runs, CharacterStyle, DocumentImage, DocumentState, ImageLayoutMode,
-        ImageRendering, ListKind, WrapMode, OBJECT_REPLACEMENT_CHAR,
+        plain_text_from_runs, text_format, CharacterStyle, DocumentImage, DocumentState,
+        FontChoice, ImageLayoutMode, ImageRendering, ListKind, WrapMode, DOCX_BODY_BOLD,
+        DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD, OBJECT_REPLACEMENT_CHAR,
     };
 
     fn test_image(id: usize) -> DocumentImage {
@@ -2813,6 +2859,51 @@ mod tests {
             move_with_text: true,
             allow_overlap: false,
         }
+    }
+
+    #[test]
+    fn bold_text_uses_registered_bold_font_faces() {
+        let body = text_format(
+            CharacterStyle {
+                bold: true,
+                ..CharacterStyle::default()
+            },
+            1.0,
+        );
+        assert_eq!(
+            body.font_id.family,
+            eframe::egui::FontFamily::Name(DOCX_BODY_BOLD.into())
+        );
+        assert_eq!(
+            body.font_id.size,
+            CharacterStyle::default().font_size_points
+        );
+
+        let monospace = text_format(
+            CharacterStyle {
+                bold: true,
+                font_choice: FontChoice::LiberationMono,
+                ..CharacterStyle::default()
+            },
+            1.0,
+        );
+        assert_eq!(
+            monospace.font_id.family,
+            eframe::egui::FontFamily::Name(DOCX_LIBERATION_MONO_BOLD.into())
+        );
+
+        let imported_family = text_format(
+            CharacterStyle {
+                bold: true,
+                font_family_name: Some("docx-carlito"),
+                ..CharacterStyle::default()
+            },
+            1.0,
+        );
+        assert_eq!(
+            imported_family.font_id.family,
+            eframe::egui::FontFamily::Name(DOCX_CARLITO_BOLD.into())
+        );
     }
 
     #[test]

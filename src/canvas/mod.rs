@@ -543,12 +543,7 @@ fn update_canvas_hover_cursor(
 }
 
 fn caret_height(style: CharacterStyle, zoom: f32) -> f32 {
-    let font_size = if style.bold {
-        style.font_size_points + 0.8
-    } else {
-        style.font_size_points
-    };
-    font_size.max(1.0) * zoom * 1.25
+    style.font_size_points.max(1.0) * zoom * 1.25
 }
 
 fn apply_grammar_replacement(
