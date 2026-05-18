@@ -735,6 +735,21 @@ pub struct DocumentState {
     pub paragraph_tables: Vec<Option<DocumentTable>>,
     pub page_size: PageSize,
     pub margins: PageMargins,
+    pub header_text: String,
+    pub footer_text: String,
+    pub first_page_header_text: String,
+    pub first_page_footer_text: String,
+    pub even_page_header_text: String,
+    pub even_page_footer_text: String,
+    pub header_runs: Vec<TextRun>,
+    pub footer_runs: Vec<TextRun>,
+    pub first_page_header_runs: Vec<TextRun>,
+    pub first_page_footer_runs: Vec<TextRun>,
+    pub even_page_header_runs: Vec<TextRun>,
+    pub even_page_footer_runs: Vec<TextRun>,
+    pub different_first_page: bool,
+    pub different_odd_even_pages: bool,
+    pub page_number_start: usize,
 }
 
 impl DocumentState {
@@ -774,6 +789,90 @@ impl DocumentState {
             paragraph_tables: vec![None; 3],
             page_size: PageSize::a4(),
             margins: PageMargins::standard(),
+            header_text: String::new(),
+            footer_text: String::new(),
+            first_page_header_text: String::new(),
+            first_page_footer_text: String::new(),
+            even_page_header_text: String::new(),
+            even_page_footer_text: String::new(),
+            header_runs: empty_header_footer_runs(),
+            footer_runs: empty_header_footer_runs(),
+            first_page_header_runs: empty_header_footer_runs(),
+            first_page_footer_runs: empty_header_footer_runs(),
+            even_page_header_runs: empty_header_footer_runs(),
+            even_page_footer_runs: empty_header_footer_runs(),
+            different_first_page: false,
+            different_odd_even_pages: false,
+            page_number_start: 1,
+        }
+    }
+
+    pub fn render_page_field(
+        &self,
+        template: &str,
+        page_number: usize,
+        page_count: usize,
+    ) -> String {
+        let displayed_page_number = self
+            .page_number_start
+            .saturating_add(page_number.saturating_sub(1));
+        template
+            .replace("{ SECTIONPAGES }", &page_count.to_string())
+            .replace("{ SECTIONPAGES}", &page_count.to_string())
+            .replace("{SECTIONPAGES }", &page_count.to_string())
+            .replace("{SECTIONPAGES}", &page_count.to_string())
+            .replace("{ NUMPAGES }", &page_count.to_string())
+            .replace("{ NUMPAGES}", &page_count.to_string())
+            .replace("{NUMPAGES }", &page_count.to_string())
+            .replace("{NUMPAGES}", &page_count.to_string())
+            .replace("{ PAGE }", &displayed_page_number.to_string())
+            .replace("{ PAGE}", &displayed_page_number.to_string())
+            .replace("{PAGE }", &displayed_page_number.to_string())
+            .replace("{PAGE}", &displayed_page_number.to_string())
+            .replace("{pagecount}", &page_count.to_string())
+            .replace("{pages}", &page_count.to_string())
+            .replace("{sectionpages}", &page_count.to_string())
+            .replace("{numpages}", &page_count.to_string())
+            .replace("{page}", &displayed_page_number.to_string())
+    }
+
+    pub fn header_template_for_page(&self, page_number: usize) -> &str {
+        if self.different_first_page && page_number == 1 {
+            &self.first_page_header_text
+        } else if self.different_odd_even_pages && page_number % 2 == 0 {
+            &self.even_page_header_text
+        } else {
+            &self.header_text
+        }
+    }
+
+    pub fn header_runs_for_page(&self, page_number: usize) -> &[TextRun] {
+        if self.different_first_page && page_number == 1 {
+            &self.first_page_header_runs
+        } else if self.different_odd_even_pages && page_number % 2 == 0 {
+            &self.even_page_header_runs
+        } else {
+            &self.header_runs
+        }
+    }
+
+    pub fn footer_template_for_page(&self, page_number: usize) -> &str {
+        if self.different_first_page && page_number == 1 {
+            &self.first_page_footer_text
+        } else if self.different_odd_even_pages && page_number % 2 == 0 {
+            &self.even_page_footer_text
+        } else {
+            &self.footer_text
+        }
+    }
+
+    pub fn footer_runs_for_page(&self, page_number: usize) -> &[TextRun] {
+        if self.different_first_page && page_number == 1 {
+            &self.first_page_footer_runs
+        } else if self.different_odd_even_pages && page_number % 2 == 0 {
+            &self.even_page_footer_runs
+        } else {
+            &self.footer_runs
         }
     }
 
@@ -1914,6 +2013,13 @@ impl PageMargins {
     }
 }
 
+fn empty_header_footer_runs() -> Vec<TextRun> {
+    vec![TextRun {
+        text: String::new(),
+        style: CharacterStyle::default(),
+    }]
+}
+
 pub(crate) fn text_format(style: CharacterStyle, zoom: f32) -> TextFormat {
     let line_color = style.text_color;
     let font_size = style.font_size_points * zoom;
@@ -1984,9 +2090,10 @@ mod tests {
     };
 
     use super::{
-        export::plain_text_from_runs, text_format, CharacterStyle, DocumentImage, DocumentState,
-        FontChoice, ImageLayoutMode, ImageRendering, ListKind, WrapMode, DOCX_BODY_BOLD,
-        DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD, OBJECT_REPLACEMENT_CHAR,
+        empty_header_footer_runs, export::plain_text_from_runs, text_format, CharacterStyle,
+        DocumentImage, DocumentState, FontChoice, ImageLayoutMode, ImageRendering, ListKind,
+        WrapMode, DOCX_BODY_BOLD, DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD,
+        OBJECT_REPLACEMENT_CHAR,
     };
 
     fn test_image(id: usize) -> DocumentImage {
@@ -2221,6 +2328,21 @@ mod tests {
             paragraph_tables: vec![None; 4],
             page_size: super::PageSize::a4(),
             margins: super::PageMargins::standard(),
+            header_text: String::new(),
+            footer_text: String::new(),
+            first_page_header_text: String::new(),
+            first_page_footer_text: String::new(),
+            even_page_header_text: String::new(),
+            even_page_footer_text: String::new(),
+            header_runs: empty_header_footer_runs(),
+            footer_runs: empty_header_footer_runs(),
+            first_page_header_runs: empty_header_footer_runs(),
+            first_page_footer_runs: empty_header_footer_runs(),
+            even_page_header_runs: empty_header_footer_runs(),
+            even_page_footer_runs: empty_header_footer_runs(),
+            different_first_page: false,
+            different_odd_even_pages: false,
+            page_number_start: 1,
         };
 
         let cursor = document
@@ -2268,6 +2390,21 @@ mod tests {
             paragraph_tables: vec![None; 4],
             page_size: super::PageSize::a4(),
             margins: super::PageMargins::standard(),
+            header_text: String::new(),
+            footer_text: String::new(),
+            first_page_header_text: String::new(),
+            first_page_footer_text: String::new(),
+            even_page_header_text: String::new(),
+            even_page_footer_text: String::new(),
+            header_runs: empty_header_footer_runs(),
+            footer_runs: empty_header_footer_runs(),
+            first_page_header_runs: empty_header_footer_runs(),
+            first_page_footer_runs: empty_header_footer_runs(),
+            even_page_header_runs: empty_header_footer_runs(),
+            even_page_footer_runs: empty_header_footer_runs(),
+            different_first_page: false,
+            different_odd_even_pages: false,
+            page_number_start: 1,
         };
 
         let cursor = document
@@ -2290,6 +2427,8 @@ mod tests {
     #[test]
     fn exports_html_with_styled_runs() {
         let mut document = DocumentState::bootstrap();
+        document.header_text = "Draft {page}".to_owned();
+        document.footer_text = "Page {page} of {pagecount}".to_owned();
         document.replace_with_runs(
             "Styled".to_owned(),
             vec![
@@ -2319,6 +2458,22 @@ mod tests {
         assert!(html.contains("font-weight:700;"));
         assert!(html.contains("Bold"));
         assert!(html.contains("Mono"));
+        assert!(html.contains("Draft 1"));
+        assert!(html.contains("Page 1 of 1"));
+    }
+
+    #[test]
+    fn renders_page_fields_with_total_page_aliases() {
+        let mut document = DocumentState::bootstrap();
+        document.page_number_start = 3;
+        assert_eq!(
+            document.render_page_field(
+                "Page {page} / { PAGE } of {pagecount} / { NUMPAGES } / { SECTIONPAGES }",
+                2,
+                7
+            ),
+            "Page 4 / 4 of 7 / 7 / 7"
+        );
     }
 
     #[test]

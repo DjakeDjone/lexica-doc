@@ -48,3 +48,8 @@ pub fn page_content_rect(page_rect: Rect, margins: PageMargins, zoom: f32) -> Re
         pos2(page_rect.right() - right, page_rect.bottom() - bottom),
     )
 }
+
+pub fn screen_points_to_document_points(screen_points: f32, zoom: f32) -> f32 {
+    screen_points / zoom
+}
+

@@ -14,11 +14,12 @@ use wasm_bindgen::{JsCast as _, JsValue};
 use crate::document::DocumentImage;
 use crate::document::{
     CharacterStyle, DocumentState, FontChoice, ListKind, ParagraphAlignment, ParagraphStyle,
+    TextRun,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::ZoomMode;
-use super::{CanvasState, ChangeHistory};
+use super::{ActiveHeaderFooter, CanvasState, ChangeHistory, HeaderFooterKind};
 
 pub(super) fn open_document(
     document: &mut DocumentState,
@@ -682,6 +683,15 @@ pub(super) fn set_highlight_color(
 }
 
 pub(super) fn sync_active_style(document: &DocumentState, canvas: &mut CanvasState) {
+    if let Some(active) = canvas.active_header_footer {
+        canvas.active_style = header_footer_selection_style_at(
+            active_header_footer_runs(document, active),
+            canvas.active_header_footer_selection.as_sorted_char_range(),
+            canvas.active_header_footer_selection.primary.index,
+        );
+        return;
+    }
+
     if let Some((table_id, row, col)) = canvas.active_table_cell {
         if let Some(style) = document.table_cell_selection_style_at(
             table_id,
@@ -744,6 +754,20 @@ fn apply_selection_or_active_style(
     canvas: &mut CanvasState,
     mutate: impl Fn(&mut CharacterStyle) + Copy,
 ) {
+    if let Some(active) = canvas.active_header_footer {
+        let range = canvas.active_header_footer_selection.as_sorted_char_range();
+        if range.start < range.end {
+            apply_style_to_header_footer_range(
+                active_header_footer_runs_mut(document, active),
+                range,
+                mutate,
+            );
+            sync_header_footer_plain_text(document, active);
+        }
+        mutate(&mut canvas.active_style);
+        return;
+    }
+
     if let Some((table_id, row, col)) = canvas.active_table_cell {
         let range = canvas.table_cell_selection.as_sorted_char_range();
         if range.start < range.end {
@@ -763,6 +787,154 @@ fn apply_selection_or_active_style(
         document.apply_style_to_range(range, mutate);
     }
     mutate(&mut canvas.active_style);
+}
+
+fn active_header_footer_runs(document: &DocumentState, active: ActiveHeaderFooter) -> &[TextRun] {
+    let first_page = document.different_first_page && active.page_number == 1;
+    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
+    match (active.kind, first_page, even_page) {
+        (HeaderFooterKind::Header, true, _) => &document.first_page_header_runs,
+        (HeaderFooterKind::Footer, true, _) => &document.first_page_footer_runs,
+        (HeaderFooterKind::Header, _, true) => &document.even_page_header_runs,
+        (HeaderFooterKind::Footer, _, true) => &document.even_page_footer_runs,
+        (HeaderFooterKind::Header, _, _) => &document.header_runs,
+        (HeaderFooterKind::Footer, _, _) => &document.footer_runs,
+    }
+}
+
+fn active_header_footer_runs_mut(
+    document: &mut DocumentState,
+    active: ActiveHeaderFooter,
+) -> &mut Vec<TextRun> {
+    let first_page = document.different_first_page && active.page_number == 1;
+    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
+    match (active.kind, first_page, even_page) {
+        (HeaderFooterKind::Header, true, _) => &mut document.first_page_header_runs,
+        (HeaderFooterKind::Footer, true, _) => &mut document.first_page_footer_runs,
+        (HeaderFooterKind::Header, _, true) => &mut document.even_page_header_runs,
+        (HeaderFooterKind::Footer, _, true) => &mut document.even_page_footer_runs,
+        (HeaderFooterKind::Header, _, _) => &mut document.header_runs,
+        (HeaderFooterKind::Footer, _, _) => &mut document.footer_runs,
+    }
+}
+
+fn sync_header_footer_plain_text(document: &mut DocumentState, active: ActiveHeaderFooter) {
+    let plain_text = runs_plain_text(active_header_footer_runs(document, active));
+    let first_page = document.different_first_page && active.page_number == 1;
+    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
+    let target = match (active.kind, first_page, even_page) {
+        (HeaderFooterKind::Header, true, _) => &mut document.first_page_header_text,
+        (HeaderFooterKind::Footer, true, _) => &mut document.first_page_footer_text,
+        (HeaderFooterKind::Header, _, true) => &mut document.even_page_header_text,
+        (HeaderFooterKind::Footer, _, true) => &mut document.even_page_footer_text,
+        (HeaderFooterKind::Header, _, _) => &mut document.header_text,
+        (HeaderFooterKind::Footer, _, _) => &mut document.footer_text,
+    };
+    *target = plain_text;
+}
+
+fn header_footer_selection_style_at(
+    runs: &[TextRun],
+    range: std::ops::Range<usize>,
+    cursor: usize,
+) -> CharacterStyle {
+    if range.start < range.end {
+        return header_footer_style_at(runs, range.start);
+    }
+    header_footer_style_at(runs, cursor)
+}
+
+fn header_footer_style_at(runs: &[TextRun], char_index: usize) -> CharacterStyle {
+    let target = char_index.min(runs_total_chars(runs));
+    let mut offset = 0usize;
+    for run in runs {
+        let len = run.text.chars().count();
+        if target < offset + len {
+            return run.style;
+        }
+        offset += len;
+    }
+    runs.last().map(|run| run.style).unwrap_or_default()
+}
+
+fn apply_style_to_header_footer_range(
+    runs: &mut Vec<TextRun>,
+    range: std::ops::Range<usize>,
+    mutate: impl Fn(&mut CharacterStyle) + Copy,
+) {
+    let start = range.start.min(runs_total_chars(runs));
+    let end = range.end.min(runs_total_chars(runs));
+    if start >= end {
+        return;
+    }
+    split_header_footer_runs_at(runs, start);
+    split_header_footer_runs_at(runs, end);
+
+    let mut offset = 0usize;
+    for run in runs.iter_mut() {
+        let len = run.text.chars().count();
+        if offset >= start && offset + len <= end {
+            mutate(&mut run.style);
+        }
+        offset += len;
+    }
+    normalize_header_footer_runs(runs);
+}
+
+fn split_header_footer_runs_at(runs: &mut Vec<TextRun>, char_index: usize) {
+    if char_index == 0 || char_index >= runs_total_chars(runs) {
+        return;
+    }
+
+    let mut offset = 0usize;
+    for index in 0..runs.len() {
+        let len = runs[index].text.chars().count();
+        if char_index > offset && char_index < offset + len {
+            let local_index = char_index - offset;
+            let byte_index = char_to_byte_index(&runs[index].text, local_index);
+            let right = runs[index].text.split_off(byte_index);
+            let style = runs[index].style;
+            runs.insert(index + 1, TextRun { text: right, style });
+            break;
+        }
+        offset += len;
+    }
+}
+
+fn normalize_header_footer_runs(runs: &mut Vec<TextRun>) {
+    runs.retain(|run| !run.text.is_empty());
+    let mut normalized: Vec<TextRun> = Vec::with_capacity(runs.len().max(1));
+    for run in runs.drain(..) {
+        if let Some(last) = normalized.last_mut() {
+            if last.style == run.style {
+                last.text.push_str(&run.text);
+                continue;
+            }
+        }
+        normalized.push(run);
+    }
+    if normalized.is_empty() {
+        normalized.push(TextRun {
+            text: String::new(),
+            style: CharacterStyle::default(),
+        });
+    }
+    *runs = normalized;
+}
+
+fn runs_plain_text(runs: &[TextRun]) -> String {
+    runs.iter().map(|run| run.text.as_str()).collect()
+}
+
+fn runs_total_chars(runs: &[TextRun]) -> usize {
+    runs.iter().map(|run| run.text.chars().count()).sum()
+}
+
+fn char_to_byte_index(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map(|(byte_index, _)| byte_index)
+        .unwrap_or(text.len())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

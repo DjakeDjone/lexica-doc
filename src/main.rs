@@ -6,6 +6,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
+use std::path::PathBuf;
+
 use wors::app::WorsApp;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -25,6 +27,11 @@ fn load_icon() -> egui::viewport::IconData {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
+    let file_to_open: Option<PathBuf> = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .filter(|p| p.exists());
+
     let native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
@@ -39,7 +46,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "wors",
         native_options,
-        Box::new(|cc| Ok(Box::new(WorsApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(WorsApp::new(cc, file_to_open)))),
     )
 }
 
@@ -64,7 +71,7 @@ pub async fn start() -> Result<(), wasm_bindgen::JsValue> {
         .start(
             canvas,
             eframe::WebOptions::default(),
-            Box::new(|cc| Ok(Box::new(WorsApp::new(cc)))),
+            Box::new(|cc| Ok(Box::new(WorsApp::new(cc, None)))),
         )
         .await?;
 

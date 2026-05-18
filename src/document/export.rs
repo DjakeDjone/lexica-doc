@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt::Write as _, fs, path::Path};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use eframe::egui::Color32;
 use printpdf::{
-    Base64OrRaw, BuiltinFont, GeneratePdfOptions, Op, PdfDocument, PdfFontHandle, PdfPage,
+    Base64OrRaw, BuiltinFont, Color, GeneratePdfOptions, Op, PdfDocument, PdfFontHandle, PdfPage,
     PdfSaveOptions, Point, Pt, TextItem,
 };
 
@@ -217,6 +217,9 @@ impl DocumentState {
 <style>\
 body {{ margin: 0; padding: 18pt; background: #e7ebf0; }}\
 .page {{ box-sizing: border-box; margin: 0 auto; width: {}pt; min-height: {}pt; padding: {}pt {}pt {}pt {}pt; background: #ffffff; color: #24272e; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.18); }}\
+.page-header, .page-footer {{ color: #58606c; font: 9pt Helvetica, Arial, sans-serif; text-align: center; }}\
+.page-header {{ margin-top: -{}pt; margin-bottom: {}pt; }}\
+.page-footer {{ margin-top: {}pt; margin-bottom: -{}pt; }}\
 .paragraph {{ margin: 0; white-space: pre-wrap; }}\
 .page-break {{ break-before: page; page-break-before: always; height: 0; }}\
 .image-block {{ display: block; max-width: 100%; }}\
@@ -231,8 +234,21 @@ body {{ margin: 0; padding: 18pt; background: #e7ebf0; }}\
             self.margins.top_points,
             self.margins.right_points,
             self.margins.bottom_points,
-            self.margins.left_points
+            self.margins.left_points,
+            (self.margins.top_points * 0.65).max(0.0),
+            (self.margins.top_points * 0.45).max(0.0),
+            (self.margins.bottom_points * 0.45).max(0.0),
+            (self.margins.bottom_points * 0.65).max(0.0)
         );
+
+        let first_header = self.header_template_for_page(1);
+        if !first_header.trim().is_empty() {
+            let _ = write!(
+                html,
+                "<div class=\"page-header\">{}</div>",
+                html_escape(&self.render_page_field(first_header, 1, 1))
+            );
+        }
 
         for paragraph in self.paragraphs() {
             if paragraph.style.page_break_before {
@@ -298,6 +314,15 @@ body {{ margin: 0; padding: 18pt; background: #e7ebf0; }}\
             html.push_str("</p>");
         }
 
+        let first_footer = self.footer_template_for_page(1);
+        if !first_footer.trim().is_empty() {
+            let _ = write!(
+                html,
+                "<div class=\"page-footer\">{}</div>",
+                html_escape(&self.render_page_field(first_footer, 1, 1))
+            );
+        }
+
         html.push_str("</div></body></html>");
         html
     }
@@ -324,6 +349,7 @@ body {{ margin: 0; padding: 18pt; background: #e7ebf0; }}\
         if rendered.pages.is_empty() {
             return Ok(self.to_plain_text_pdf_bytes());
         }
+        self.stamp_pdf_header_footer(&mut rendered);
 
         Ok(rendered.save(&PdfSaveOptions::default(), &mut warnings))
     }
@@ -497,10 +523,110 @@ p {{ margin: 0; white-space: pre-wrap; }}\
         }
 
         let mut document = PdfDocument::new(&self.title);
+        self.stamp_pdf_pages_header_footer(&mut pages);
         let document = document.with_pages(pages);
         let mut warnings = Vec::new();
         document.save(&PdfSaveOptions::default(), &mut warnings)
     }
+
+    fn stamp_pdf_header_footer(&self, document: &mut PdfDocument) {
+        self.stamp_pdf_pages_header_footer(&mut document.pages);
+    }
+
+    fn stamp_pdf_pages_header_footer(&self, pages: &mut [PdfPage]) {
+        if self.header_text.trim().is_empty() && self.footer_text.trim().is_empty() {
+            return;
+        }
+
+        let page_count = pages.len();
+        for (index, page) in pages.iter_mut().enumerate() {
+            let page_number = index + 1;
+            let header = self.render_page_field(
+                self.header_template_for_page(page_number),
+                page_number,
+                page_count,
+            );
+            let footer = self.render_page_field(
+                self.footer_template_for_page(page_number),
+                page_number,
+                page_count,
+            );
+            append_pdf_page_field_ops(
+                &mut page.ops,
+                &header,
+                self.page_size.width_points,
+                self.margins.left_points,
+                self.margins.right_points,
+                self.page_size.height_points - (self.margins.top_points * 0.5).max(12.0),
+            );
+            append_pdf_page_field_ops(
+                &mut page.ops,
+                &footer,
+                self.page_size.width_points,
+                self.margins.left_points,
+                self.margins.right_points,
+                (self.margins.bottom_points * 0.5).max(12.0),
+            );
+        }
+    }
+}
+
+fn append_pdf_page_field_ops(
+    ops: &mut Vec<Op>,
+    text: &str,
+    page_width: f32,
+    left_margin: f32,
+    right_margin: f32,
+    y: f32,
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+
+    let segments: Vec<&str> = text.split('\t').collect();
+    append_pdf_text_segment(
+        ops,
+        segments.first().copied().unwrap_or_default(),
+        left_margin,
+        y,
+    );
+    if let Some(center) = segments.get(1).filter(|segment| !segment.is_empty()) {
+        let width = estimate_pdf_text_width(center, 9.0);
+        append_pdf_text_segment(ops, center, page_width * 0.5 - width * 0.5, y);
+    }
+    if segments.len() > 2 {
+        let right = segments[2..].join(" ");
+        let width = estimate_pdf_text_width(&right, 9.0);
+        append_pdf_text_segment(ops, &right, page_width - right_margin - width, y);
+    }
+}
+
+fn append_pdf_text_segment(ops: &mut Vec<Op>, text: &str, x: f32, y: f32) {
+    if text.is_empty() {
+        return;
+    }
+
+    ops.extend([
+        Op::StartTextSection,
+        Op::SetFillColor {
+            col: Color::Rgb(printpdf::Rgb::new(0.35, 0.38, 0.43, None)),
+        },
+        Op::SetFont {
+            font: PdfFontHandle::Builtin(BuiltinFont::Helvetica),
+            size: Pt(9.0),
+        },
+        Op::SetTextCursor {
+            pos: Point { x: Pt(x), y: Pt(y) },
+        },
+        Op::ShowText {
+            items: vec![TextItem::Text(text.to_owned())],
+        },
+        Op::EndTextSection,
+    ]);
+}
+
+fn estimate_pdf_text_width(text: &str, font_size: f32) -> f32 {
+    text.chars().count() as f32 * font_size * 0.5
 }
 
 pub(super) fn plain_text_from_runs(runs: &[TextRun]) -> String {

@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::document::{
-    DocumentState, FontChoice, ImageLayoutMode, ImageRendering, ListKind, ParagraphAlignment,
-    WrapMode, OBJECT_REPLACEMENT_CHAR,
+    CharacterStyle, DocumentState, FontChoice, ImageLayoutMode, ImageRendering, ListKind,
+    ParagraphAlignment, TextRun, WrapMode, OBJECT_REPLACEMENT_CHAR,
 };
 use crate::grammar::{GrammarConfig, GrammarStatus, Language};
 
@@ -18,7 +18,7 @@ use super::{
         toggle_strikethrough, toggle_underline,
     },
     palette::{theme_switch, ThemeMode, ThemePalette},
-    CanvasState, ChangeHistory, ZoomMode,
+    ActiveHeaderFooter, CanvasState, ChangeHistory, HeaderFooterKind, ZoomMode,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -419,6 +419,7 @@ pub(super) fn paint_ribbon(
                     ribbon_color_group(ui, document, canvas, history, palette);
                 }
                 RibbonTab::Layout => {
+                    ribbon_header_footer_group(ui, document, status_message, history, palette);
                     ribbon_view_group(ui, canvas, status_message, theme_mode, palette);
                     ribbon_info_group(
                         ui,
@@ -659,6 +660,71 @@ fn ribbon_insert_group(
         if ui.button("Page Break").clicked() {
             insert_page_break(document, canvas, status_message, history);
         }
+        if ui.button("Header").clicked() {
+            canvas.active_header_footer = Some(ActiveHeaderFooter {
+                kind: HeaderFooterKind::Header,
+                page_number: 1,
+            });
+            canvas.active_header_footer_cursor = document
+                .header_runs
+                .iter()
+                .map(|run| run.text.chars().count())
+                .sum();
+            canvas.active_header_footer_selection = egui::text_selection::CCursorRange::one(
+                egui::epaint::text::cursor::CCursor::new(canvas.active_header_footer_cursor),
+            );
+            *status_message = "Editing header".to_owned();
+        }
+        if ui.button("Footer").clicked() {
+            canvas.active_header_footer = Some(ActiveHeaderFooter {
+                kind: HeaderFooterKind::Footer,
+                page_number: 1,
+            });
+            canvas.active_header_footer_cursor = document
+                .footer_runs
+                .iter()
+                .map(|run| run.text.chars().count())
+                .sum();
+            canvas.active_header_footer_selection = egui::text_selection::CCursorRange::one(
+                egui::epaint::text::cursor::CCursor::new(canvas.active_header_footer_cursor),
+            );
+            *status_message = "Editing footer".to_owned();
+        }
+        if ui.button("Page Number").clicked() {
+            history.checkpoint(document, ui.input(|i| i.time));
+            if document
+                .footer_runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>()
+                .trim()
+                .is_empty()
+            {
+                document.footer_runs = vec![TextRun {
+                    text: "Page { PAGE } of { NUMPAGES }".to_owned(),
+                    style: canvas.active_style,
+                }];
+            } else {
+                document.footer_runs.push(TextRun {
+                    text: " { PAGE }".to_owned(),
+                    style: canvas.active_style,
+                });
+            }
+            document.footer_text = document
+                .footer_runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect();
+            canvas.active_header_footer = Some(ActiveHeaderFooter {
+                kind: HeaderFooterKind::Footer,
+                page_number: 1,
+            });
+            canvas.active_header_footer_cursor = document.footer_text.chars().count();
+            canvas.active_header_footer_selection = egui::text_selection::CCursorRange::one(
+                egui::epaint::text::cursor::CCursor::new(canvas.active_header_footer_cursor),
+            );
+            *status_message = "Page number inserted".to_owned();
+        }
         ui.separator();
         ui.menu_button("Table", |ui| {
             ui.label(egui::RichText::new("Insert Table").size(12.0).strong());
@@ -716,6 +782,88 @@ fn ribbon_insert_group(
                         .color(palette.text_muted),
                 );
             }
+        });
+    });
+}
+
+fn ribbon_header_footer_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Header / Footer", palette, |ui| {
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                let mut different_first = document.different_first_page;
+                if ui
+                    .checkbox(&mut different_first, "Different First Page")
+                    .changed()
+                {
+                    history.checkpoint(document, ui.input(|i| i.time));
+                    document.different_first_page = different_first;
+                    *status_message = "First page header/footer setting updated".to_owned();
+                }
+                let mut different_even = document.different_odd_even_pages;
+                if ui.checkbox(&mut different_even, "Odd & Even").changed() {
+                    history.checkpoint(document, ui.input(|i| i.time));
+                    document.different_odd_even_pages = different_even;
+                    *status_message = "Odd/even header/footer setting updated".to_owned();
+                }
+                ui.label("Start");
+                let mut page_start = document.page_number_start as i32;
+                let start_resp = ui.add(
+                    egui::DragValue::new(&mut page_start)
+                        .range(0..=9999)
+                        .speed(1.0),
+                );
+                if start_resp.changed() {
+                    history.checkpoint_coalesced(document, ui.input(|i| i.time));
+                    document.page_number_start = page_start.max(0) as usize;
+                    *status_message = "Page number start updated".to_owned();
+                }
+            });
+            let mut header = document.header_text.clone();
+            let header_resp = ui.add_sized(
+                egui::vec2(220.0, 20.0),
+                egui::TextEdit::singleline(&mut header).hint_text("Odd/default header"),
+            );
+            if header_resp.changed() {
+                history.checkpoint_coalesced(document, ui.input(|i| i.time));
+                document.header_text = header;
+                document.header_runs = vec![TextRun {
+                    text: document.header_text.clone(),
+                    style: CharacterStyle::default(),
+                }];
+                *status_message = "Header updated".to_owned();
+            }
+
+            let mut footer = document.footer_text.clone();
+            ui.horizontal(|ui| {
+                let footer_resp = ui.add_sized(
+                    egui::vec2(150.0, 20.0),
+                    egui::TextEdit::singleline(&mut footer).hint_text("Odd/default footer"),
+                );
+                if footer_resp.changed() {
+                    history.checkpoint_coalesced(document, ui.input(|i| i.time));
+                    document.footer_text = footer.clone();
+                    document.footer_runs = vec![TextRun {
+                        text: document.footer_text.clone(),
+                        style: CharacterStyle::default(),
+                    }];
+                    *status_message = "Footer updated".to_owned();
+                }
+                if ui.button("Page Count").clicked() {
+                    history.checkpoint(document, ui.input(|i| i.time));
+                    document.footer_text = "Page { PAGE } of { NUMPAGES }".to_owned();
+                    document.footer_runs = vec![TextRun {
+                        text: document.footer_text.clone(),
+                        style: CharacterStyle::default(),
+                    }];
+                    *status_message = "Footer page count inserted".to_owned();
+                }
+            });
         });
     });
 }

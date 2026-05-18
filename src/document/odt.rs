@@ -984,8 +984,26 @@ fn write_image(
 }
 
 fn styles_xml(document: &DocumentState) -> String {
+    let mut master_page =
+        "<style:master-page style:name=\"Standard\" style:page-layout-name=\"pm1\">".to_owned();
+    if !document.header_text.trim().is_empty() {
+        let _ = write!(
+            master_page,
+            "<style:header><text:p>{}</text:p></style:header>",
+            odt_page_field_xml(&document.header_text)
+        );
+    }
+    if !document.footer_text.trim().is_empty() {
+        let _ = write!(
+            master_page,
+            "<style:footer><text:p>{}</text:p></style:footer>",
+            odt_page_field_xml(&document.footer_text)
+        );
+    }
+    master_page.push_str("</style:master-page>");
+
     format!(
-        "{}<office:document-styles {} office:version=\"1.3\"><office:styles><style:style style:name=\"Standard\" style:family=\"paragraph\"/></office:styles><office:automatic-styles><style:page-layout style:name=\"pm1\"><style:page-layout-properties fo:page-width=\"{:.2}pt\" fo:page-height=\"{:.2}pt\" fo:margin-top=\"{:.2}pt\" fo:margin-right=\"{:.2}pt\" fo:margin-bottom=\"{:.2}pt\" fo:margin-left=\"{:.2}pt\"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name=\"Standard\" style:page-layout-name=\"pm1\"/></office:master-styles></office:document-styles>",
+        "{}<office:document-styles {} office:version=\"1.3\"><office:styles><style:style style:name=\"Standard\" style:family=\"paragraph\"/></office:styles><office:automatic-styles><style:page-layout style:name=\"pm1\"><style:page-layout-properties fo:page-width=\"{:.2}pt\" fo:page-height=\"{:.2}pt\" fo:margin-top=\"{:.2}pt\" fo:margin-right=\"{:.2}pt\" fo:margin-bottom=\"{:.2}pt\" fo:margin-left=\"{:.2}pt\"/></style:page-layout></office:automatic-styles><office:master-styles>{}</office:master-styles></office:document-styles>",
         xml_decl(),
         namespaces(),
         document.page_size.width_points,
@@ -993,8 +1011,48 @@ fn styles_xml(document: &DocumentState) -> String {
         document.margins.top_points,
         document.margins.right_points,
         document.margins.bottom_points,
-        document.margins.left_points
+        document.margins.left_points,
+        master_page
     )
+}
+
+fn odt_page_field_xml(template: &str) -> String {
+    let mut xml = String::new();
+    let mut remaining = template;
+    while !remaining.is_empty() {
+        let Some(start) = remaining.find('{') else {
+            xml.push_str(&xml_escape(remaining));
+            break;
+        };
+        xml.push_str(&xml_escape(&remaining[..start]));
+        let tail = &remaining[start..];
+        if let Some(next) = tail
+            .strip_prefix("{ NUMPAGES }")
+            .or_else(|| tail.strip_prefix("{NUMPAGES}"))
+            .or_else(|| tail.strip_prefix("{ SECTIONPAGES }"))
+            .or_else(|| tail.strip_prefix("{SECTIONPAGES}"))
+            .or_else(|| tail.strip_prefix("{pagecount}"))
+            .or_else(|| tail.strip_prefix("{sectionpages}"))
+            .or_else(|| tail.strip_prefix("{numpages}"))
+        {
+            xml.push_str("<text:page-count/>");
+            remaining = next;
+        } else if let Some(next) = tail.strip_prefix("{pages}") {
+            xml.push_str("<text:page-count/>");
+            remaining = next;
+        } else if let Some(next) = tail
+            .strip_prefix("{ PAGE }")
+            .or_else(|| tail.strip_prefix("{PAGE}"))
+            .or_else(|| tail.strip_prefix("{page}"))
+        {
+            xml.push_str("<text:page-number/>");
+            remaining = next;
+        } else {
+            xml.push('{');
+            remaining = &remaining[start + 1..];
+        }
+    }
+    xml
 }
 
 fn manifest_xml(images: &[OdtImage]) -> String {

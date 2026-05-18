@@ -62,6 +62,18 @@ pub enum ZoomMode {
     FitPage,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HeaderFooterKind {
+    Header,
+    Footer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ActiveHeaderFooter {
+    pub kind: HeaderFooterKind,
+    pub page_number: usize,
+}
+
 pub struct CanvasState {
     pub zoom: f32,
     pub zoom_mode: ZoomMode,
@@ -82,6 +94,9 @@ pub struct CanvasState {
     pub table_cell_selection: egui::text_selection::CCursorRange,
     pub table_resize_handles: Vec<TableResizeHandleRect>,
     pub table_resize_drag: Option<TableResizeDrag>,
+    pub active_header_footer: Option<ActiveHeaderFooter>,
+    pub active_header_footer_cursor: usize,
+    pub active_header_footer_selection: egui::text_selection::CCursorRange,
 }
 
 impl Default for CanvasState {
@@ -106,6 +121,9 @@ impl Default for CanvasState {
             table_cell_selection: egui::text_selection::CCursorRange::default(),
             table_resize_handles: Vec::new(),
             table_resize_drag: None,
+            active_header_footer: None,
+            active_header_footer_cursor: 0,
+            active_header_footer_selection: egui::text_selection::CCursorRange::default(),
         }
     }
 }

@@ -39,8 +39,8 @@ use actions::open_document_from_path;
 use actions::{handle_global_shortcuts, open_document, save_document, save_document_as_with_name};
 use backstage::{paint_backstage, BackstageOutput, BackstageState};
 pub use canvas_state::{
-    CanvasState, ImageMoveDrag, ImageResizeDrag, ResizeHandle, TableResizeDrag,
-    TableResizeHandleRect, TableResizeKind, ZoomMode,
+    ActiveHeaderFooter, CanvasState, HeaderFooterKind, ImageMoveDrag, ImageResizeDrag,
+    ResizeHandle, TableResizeDrag, TableResizeHandleRect, TableResizeKind, ZoomMode,
 };
 use chrome::{paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar, RibbonTab};
 pub use history::ChangeHistory;
@@ -105,7 +105,8 @@ pub struct WorsApp {
 const LOGO_BYTES: &[u8] = include_bytes!("../../assets/logo.png");
 
 impl WorsApp {
-    pub fn new(cc: &CreationContext<'_>) -> Self {
+    #[allow(unused_variables)]
+    pub fn new(cc: &CreationContext<'_>, file_to_open: Option<PathBuf>) -> Self {
         cc.egui_ctx
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point());
         configure_docx_fonts(&cc.egui_ctx);
@@ -199,6 +200,18 @@ impl WorsApp {
             if let Err(message) = app.start_grammar_service() {
                 app.grammar_status = GrammarStatus::Unavailable(message);
             }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = file_to_open {
+            open_document_from_path(
+                &mut app.document,
+                &mut app.canvas,
+                &mut app.status_message,
+                &mut app.current_path,
+                &mut app.history,
+                &path,
+            );
         }
 
         app

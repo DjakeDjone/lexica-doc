@@ -17,12 +17,12 @@ use eframe::egui::{
 
 use crate::{
     app::{
-        CanvasState, ChangeHistory, ResizeHandle, TableResizeDrag, TableResizeHandleRect,
-        TableResizeKind, ThemeMode,
+        ActiveHeaderFooter, CanvasState, ChangeHistory, HeaderFooterKind, ResizeHandle,
+        TableResizeDrag, TableResizeHandleRect, TableResizeKind, ThemeMode,
     },
     document::{
         text_format, CharacterStyle, DocumentImage, DocumentState, DocumentTable, LineSpacingKind,
-        ParagraphAlignment, WrapMode, OBJECT_REPLACEMENT_CHAR,
+        ParagraphAlignment, TextRun, WrapMode, OBJECT_REPLACEMENT_CHAR,
     },
     grammar::GrammarError,
     layout::{
@@ -125,6 +125,33 @@ pub fn paint_document_canvas(
         &document_layout.manual_page_break_rows,
     );
 
+    if canvas.active_header_footer.is_some()
+        && ui.input(|input| input.key_pressed(egui::Key::Escape))
+    {
+        canvas.active_header_footer = None;
+    }
+    if response.double_clicked() {
+        if let Some(pointer_pos) = response.interact_pointer_pos() {
+            if let Some(active) = header_footer_hit(&page_layout, document, canvas, pointer_pos) {
+                canvas.active_header_footer = Some(active);
+                canvas.active_header_footer_cursor =
+                    runs_total_chars(active_header_footer_runs(document, active));
+                canvas.active_header_footer_selection =
+                    CCursorRange::one(CCursor::new(canvas.active_header_footer_cursor));
+                canvas.active_table_cell = None;
+                canvas.selected_image_id = None;
+                response.request_focus();
+            } else if canvas.active_header_footer.is_some()
+                && page_layout
+                    .pages
+                    .iter()
+                    .any(|page| page.content_rect.contains(pointer_pos))
+            {
+                canvas.active_header_footer = None;
+            }
+        }
+    }
+
     let has_focus = ui.memory(|mem| mem.has_focus(editor_id));
     if has_focus {
         ui.memory_mut(|mem| {
@@ -139,7 +166,10 @@ pub fn paint_document_canvas(
             );
         });
     }
-    if has_focus && handle_keyboard_input(ui, document, canvas, &document_layout.galley, history) {
+    if has_focus
+        && canvas.active_header_footer.is_none()
+        && handle_keyboard_input(ui, document, canvas, &document_layout.galley, history)
+    {
         output.text_changed = true;
         document_layout = layout_document(ui, document, canvas, content_size.x);
     }
@@ -158,7 +188,7 @@ pub fn paint_document_canvas(
     let mut new_table_cell_content_rects: Vec<(usize, usize, usize, Rect)> = Vec::new();
     let mut new_table_resize_handles: Vec<TableResizeHandleRect> = Vec::new();
 
-    for page in &page_layout.pages {
+    for (page_index, page) in page_layout.pages.iter().enumerate() {
         let shadow_offset = egui::vec2(
             document_points_to_screen_points(6.0, canvas.zoom),
             document_points_to_screen_points(8.0, canvas.zoom),
@@ -181,6 +211,17 @@ pub fn paint_document_canvas(
                 },
             ),
             StrokeKind::Outside,
+        );
+
+        paint_page_header_footer(
+            &painter,
+            document,
+            canvas,
+            page.page_rect,
+            page_index + 1,
+            page_layout.pages.len(),
+            canvas.active_header_footer,
+            palette.footer_text,
         );
 
         let visible_content_rect = Rect::from_min_size(
@@ -351,6 +392,18 @@ pub fn paint_document_canvas(
         }
     }
 
+    if paint_active_header_footer_editor(
+        ui,
+        document,
+        canvas,
+        history,
+        &page_layout,
+        &response,
+        editor_id,
+    ) {
+        output.text_changed = true;
+    }
+
     let squiggle_pages: Vec<SquigglePageSlice> = page_layout
         .pages
         .iter()
@@ -373,8 +426,12 @@ pub fn paint_document_canvas(
     canvas.table_cell_content_rects = new_table_cell_content_rects;
     canvas.table_resize_handles = new_table_resize_handles;
 
-    let (table_pointer_captured, table_document_changed) =
-        handle_table_interaction(ui, &response, canvas, document, history);
+    let (table_pointer_captured, table_document_changed) = if canvas.active_header_footer.is_some()
+    {
+        (true, false)
+    } else {
+        handle_table_interaction(ui, &response, canvas, document, history)
+    };
     output.text_changed |= table_document_changed;
 
     let (image_pointer_captured, image_document_changed) = if table_pointer_captured {
@@ -384,7 +441,7 @@ pub fn paint_document_canvas(
     };
     output.text_changed |= image_document_changed;
 
-    if !table_pointer_captured && !image_pointer_captured {
+    if !table_pointer_captured && !image_pointer_captured && canvas.active_header_footer.is_none() {
         handle_pointer_interaction(
             ui,
             &response,
@@ -428,7 +485,11 @@ pub fn paint_document_canvas(
         paint_image_selection(&painter, *selected_rect);
     }
 
-    if has_focus && canvas.selected_image_id.is_none() && canvas.active_table_cell.is_none() {
+    if has_focus
+        && canvas.selected_image_id.is_none()
+        && canvas.active_table_cell.is_none()
+        && canvas.active_header_footer.is_none()
+    {
         if let Some(caret_rect) = page_layout.caret_rect(
             &document_layout.galley,
             canvas.selection.primary,
@@ -494,6 +555,1069 @@ pub fn paint_document_canvas(
     }
 
     output
+}
+
+fn paint_page_header_footer(
+    painter: &egui::Painter,
+    document: &DocumentState,
+    canvas: &CanvasState,
+    page_rect: Rect,
+    page_number: usize,
+    page_count: usize,
+    active_header_footer: Option<ActiveHeaderFooter>,
+    color: Color32,
+) {
+    let horizontal_margin =
+        document_points_to_screen_points(document.margins.left_points.max(18.0), canvas.zoom);
+    let text_width = (page_rect.width() - horizontal_margin * 2.0).max(1.0);
+
+    let header_runs = rendered_header_footer_runs(
+        document,
+        document.header_runs_for_page(page_number),
+        page_number,
+        page_count,
+    );
+    if !runs_plain_text(&header_runs).trim().is_empty()
+        && active_header_footer
+            != Some(ActiveHeaderFooter {
+                kind: HeaderFooterKind::Header,
+                page_number,
+            })
+    {
+        let font_size = header_footer_base_font_size(&header_runs, canvas.zoom);
+        let header_margin =
+            document_points_to_screen_points(document.margins.top_points, canvas.zoom);
+        let y = page_rect.top()
+            + (header_margin - font_size).max(document_points_to_screen_points(4.0, canvas.zoom))
+                * 0.5;
+        paint_tab_aligned_margin_runs(
+            painter,
+            &header_runs,
+            canvas.zoom,
+            color,
+            Rect::from_min_size(
+                egui::pos2(page_rect.left() + horizontal_margin, y),
+                egui::vec2(text_width, font_size),
+            ),
+            None,
+        );
+    }
+
+    let footer_runs = rendered_header_footer_runs(
+        document,
+        document.footer_runs_for_page(page_number),
+        page_number,
+        page_count,
+    );
+    if !runs_plain_text(&footer_runs).trim().is_empty()
+        && active_header_footer
+            != Some(ActiveHeaderFooter {
+                kind: HeaderFooterKind::Footer,
+                page_number,
+            })
+    {
+        let font_size = header_footer_base_font_size(&footer_runs, canvas.zoom);
+        let bottom_margin =
+            document_points_to_screen_points(document.margins.bottom_points, canvas.zoom);
+        let y = page_rect.bottom() - bottom_margin * 0.5 - font_size * 0.5;
+        paint_tab_aligned_margin_runs(
+            painter,
+            &footer_runs,
+            canvas.zoom,
+            color,
+            Rect::from_min_size(
+                egui::pos2(page_rect.left() + horizontal_margin, y),
+                egui::vec2(text_width, font_size),
+            ),
+            None,
+        );
+    }
+}
+
+fn rendered_header_footer_runs(
+    document: &DocumentState,
+    runs: &[TextRun],
+    page_number: usize,
+    page_count: usize,
+) -> Vec<TextRun> {
+    runs.iter()
+        .map(|run| TextRun {
+            text: document.render_page_field(&run.text, page_number, page_count),
+            style: run.style,
+        })
+        .collect()
+}
+
+fn paint_tab_aligned_margin_runs(
+    painter: &egui::Painter,
+    runs: &[TextRun],
+    zoom: f32,
+    fallback_color: Color32,
+    rect: Rect,
+    selection: Option<std::ops::Range<usize>>,
+) {
+    let segments = split_runs_for_header_tabs(runs);
+    for slot in 0..3 {
+        let Some(segment) = segments.get(slot) else {
+            continue;
+        };
+        if segment.runs.is_empty() {
+            continue;
+        }
+        let segment_width = measure_runs_width(painter, &segment.runs, zoom);
+        let mut x = match slot {
+            0 => rect.left(),
+            1 => rect.center().x - segment_width * 0.5,
+            _ => rect.right() - segment_width,
+        };
+        for piece in &segment.runs {
+            let Some(piece_range) = piece.range.clone() else {
+                continue;
+            };
+            if let Some(selection) = &selection {
+                let start = piece_range.start.max(selection.start);
+                let end = piece_range.end.min(selection.end);
+                if start < end {
+                    let before = slice_run_text_chars(&piece.text, 0..start - piece_range.start);
+                    let selected = slice_run_text_chars(
+                        &piece.text,
+                        start - piece_range.start..end - piece_range.start,
+                    );
+                    let selected_x = x + measure_text_width(painter, &before, piece.style, zoom);
+                    let selected_width = measure_text_width(painter, &selected, piece.style, zoom);
+                    painter.rect_filled(
+                        Rect::from_min_size(
+                            egui::pos2(selected_x, rect.top()),
+                            egui::vec2(
+                                selected_width,
+                                header_footer_line_height(piece.runs_style(), zoom),
+                            ),
+                        ),
+                        CornerRadius::ZERO,
+                        Color32::from_rgba_unmultiplied(80, 135, 230, 80),
+                    );
+                }
+            }
+            paint_run_text(
+                painter,
+                &piece.text,
+                piece.style,
+                zoom,
+                egui::pos2(x, rect.top()),
+                fallback_color,
+            );
+            x += measure_text_width(painter, &piece.text, piece.style, zoom);
+        }
+    }
+}
+
+#[derive(Clone)]
+struct HeaderRunPiece {
+    text: String,
+    style: CharacterStyle,
+    range: Option<std::ops::Range<usize>>,
+}
+
+impl HeaderRunPiece {
+    fn runs_style(&self) -> CharacterStyle {
+        self.style
+    }
+}
+
+struct HeaderSegment {
+    runs: Vec<HeaderRunPiece>,
+    end: usize,
+}
+
+fn split_runs_for_header_tabs(runs: &[TextRun]) -> Vec<HeaderSegment> {
+    let mut segments = vec![HeaderSegment {
+        runs: Vec::new(),
+        end: 0,
+    }];
+    let mut slot = 0usize;
+    let mut char_index = 0usize;
+
+    for run in runs {
+        let mut text = String::new();
+        let mut piece_start = char_index;
+        for ch in run.text.chars() {
+            if ch == '\t' && slot < 2 {
+                if !text.is_empty() {
+                    segments[slot].runs.push(HeaderRunPiece {
+                        text: std::mem::take(&mut text),
+                        style: run.style,
+                        range: Some(piece_start..char_index),
+                    });
+                }
+                segments[slot].end = char_index;
+                slot += 1;
+                char_index += 1;
+                piece_start = char_index;
+                segments.push(HeaderSegment {
+                    runs: Vec::new(),
+                    end: char_index,
+                });
+            } else {
+                text.push(if ch == '\t' { ' ' } else { ch });
+                char_index += 1;
+            }
+        }
+        if !text.is_empty() {
+            segments[slot].runs.push(HeaderRunPiece {
+                text,
+                style: run.style,
+                range: Some(piece_start..char_index),
+            });
+        }
+    }
+    if let Some(segment) = segments.get_mut(slot) {
+        segment.end = char_index;
+    }
+    segments
+}
+
+fn measure_runs_width(painter: &egui::Painter, runs: &[HeaderRunPiece], zoom: f32) -> f32 {
+    runs.iter()
+        .map(|run| measure_text_width(painter, &run.text, run.style, zoom))
+        .sum()
+}
+
+fn measure_text_width(
+    painter: &egui::Painter,
+    text: &str,
+    style: CharacterStyle,
+    zoom: f32,
+) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    header_footer_text_galley(painter, text, style, zoom, Color32::BLACK)
+        .size()
+        .x
+}
+
+fn paint_run_text(
+    painter: &egui::Painter,
+    text: &str,
+    style: CharacterStyle,
+    zoom: f32,
+    pos: egui::Pos2,
+    fallback_color: Color32,
+) {
+    if text.is_empty() {
+        return;
+    }
+    painter.galley(
+        pos,
+        header_footer_text_galley(painter, text, style, zoom, fallback_color),
+        fallback_color,
+    );
+}
+
+fn header_footer_text_galley(
+    painter: &egui::Painter,
+    text: &str,
+    style: CharacterStyle,
+    zoom: f32,
+    fallback_color: Color32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut format = text_format(style, zoom);
+    if format.color == Color32::TRANSPARENT {
+        format.color = fallback_color;
+    }
+    let mut job = egui::epaint::text::LayoutJob::default();
+    job.append(text, 0.0, format);
+    painter.layout_job(job)
+}
+
+fn header_footer_line_height(style: CharacterStyle, zoom: f32) -> f32 {
+    (style.font_size_points * zoom).max(1.0) * 1.2
+}
+
+fn header_footer_base_font_size(runs: &[TextRun], zoom: f32) -> f32 {
+    runs.iter()
+        .find(|run| !run.text.is_empty())
+        .map(|run| run.style.font_size_points * zoom)
+        .unwrap_or(9.0 * zoom)
+        .clamp(7.0, 28.0)
+}
+
+fn header_footer_hit(
+    page_layout: &PageLayout,
+    document: &DocumentState,
+    canvas: &CanvasState,
+    pointer_pos: egui::Pos2,
+) -> Option<ActiveHeaderFooter> {
+    page_layout
+        .pages
+        .iter()
+        .enumerate()
+        .find_map(|(index, page)| {
+            let page_number = index + 1;
+            if page_header_rect(page.page_rect, document, canvas).contains(pointer_pos) {
+                Some(ActiveHeaderFooter {
+                    kind: HeaderFooterKind::Header,
+                    page_number,
+                })
+            } else if page_footer_rect(page.page_rect, document, canvas).contains(pointer_pos) {
+                Some(ActiveHeaderFooter {
+                    kind: HeaderFooterKind::Footer,
+                    page_number,
+                })
+            } else {
+                None
+            }
+        })
+}
+
+fn paint_active_header_footer_editor(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+    page_layout: &PageLayout,
+    response: &egui::Response,
+    editor_id: Id,
+) -> bool {
+    let Some(active) = canvas.active_header_footer else {
+        return false;
+    };
+    let Some(page) = page_layout.pages.get(active.page_number.saturating_sub(1)) else {
+        canvas.active_header_footer = None;
+        return false;
+    };
+
+    let margin_rect = match active.kind {
+        HeaderFooterKind::Header => page_header_rect(page.page_rect, document, canvas),
+        HeaderFooterKind::Footer => page_footer_rect(page.page_rect, document, canvas),
+    };
+    let horizontal_margin =
+        document_points_to_screen_points(document.margins.left_points.max(18.0), canvas.zoom);
+    let editor_height = document_points_to_screen_points(20.0, canvas.zoom).clamp(18.0, 28.0);
+    let editor_rect = Rect::from_center_size(
+        margin_rect.center(),
+        egui::vec2(
+            (margin_rect.width() - horizontal_margin * 2.0).max(80.0),
+            editor_height,
+        ),
+    );
+
+    let guide_y = match active.kind {
+        HeaderFooterKind::Header => margin_rect.bottom(),
+        HeaderFooterKind::Footer => margin_rect.top(),
+    };
+    ui.painter().line_segment(
+        [
+            egui::pos2(editor_rect.left(), guide_y),
+            egui::pos2(editor_rect.right(), guide_y),
+        ],
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 130, 145, 110)),
+    );
+
+    let active_runs = active_header_footer_runs(document, active).to_vec();
+
+    if let Some(pointer_pos) = response.interact_pointer_pos() {
+        let press_origin = ui.input(|i| i.pointer.press_origin());
+        let interact_header = editor_rect.expand(20.0).contains(pointer_pos)
+            || press_origin.map_or(false, |origin| editor_rect.expand(20.0).contains(origin));
+
+        if interact_header {
+            if response.clicked() || response.drag_started() {
+                response.request_focus();
+            }
+            let cursor = CCursor::new(header_footer_cursor_from_pos(
+                ui.painter(),
+                &active_runs,
+                canvas.zoom,
+                editor_rect,
+                pointer_pos.x,
+            ));
+            if response.drag_started() {
+                if ui.input(|input| input.modifiers.shift) {
+                    canvas.active_header_footer_selection.primary = cursor;
+                } else {
+                    canvas.active_header_footer_selection = CCursorRange::one(cursor);
+                }
+                canvas.active_header_footer_cursor = cursor.index;
+                canvas.active_header_footer_selection.h_pos = None;
+                canvas.last_interaction_time = ui.input(|input| input.time);
+            } else if response.dragged() {
+                canvas.active_header_footer_selection.primary = cursor;
+                canvas.active_header_footer_cursor = cursor.index;
+                canvas.active_header_footer_selection.h_pos = None;
+                canvas.last_interaction_time = ui.input(|input| input.time);
+            } else if response.clicked() {
+                if ui.input(|input| input.modifiers.shift) {
+                    canvas.active_header_footer_selection.primary = cursor;
+                } else {
+                    canvas.active_header_footer_selection = CCursorRange::one(cursor);
+                }
+                canvas.active_header_footer_cursor = cursor.index;
+                canvas.active_header_footer_selection.h_pos = None;
+                canvas.last_interaction_time = ui.input(|input| input.time);
+            }
+        }
+    }
+
+    let has_focus = ui.memory(|memory| memory.has_focus(editor_id));
+
+    let mut edited_runs = active_runs;
+    let total_chars = runs_total_chars(&edited_runs);
+    canvas.active_header_footer_cursor = canvas.active_header_footer_cursor.min(total_chars);
+    canvas.active_header_footer_selection.primary.index = canvas
+        .active_header_footer_selection
+        .primary
+        .index
+        .min(total_chars);
+    canvas.active_header_footer_selection.secondary.index = canvas
+        .active_header_footer_selection
+        .secondary
+        .index
+        .min(total_chars);
+    let before_runs = edited_runs.clone();
+    let changed = if has_focus {
+        handle_header_footer_keyboard_input(ui, &mut edited_runs, canvas, history, document)
+    } else {
+        false
+    };
+    if runs_plain_text(&edited_runs).trim().is_empty() {
+        let hint = match active.kind {
+            HeaderFooterKind::Header => "Header",
+            HeaderFooterKind::Footer => "Footer",
+        };
+        ui.painter().text(
+            editor_rect.left_top(),
+            Align2::LEFT_TOP,
+            hint,
+            FontId::new(editor_height * 0.72, FontFamily::Proportional),
+            Color32::from_rgba_premultiplied(96, 104, 118, 140),
+        );
+    } else {
+        let selection = has_focus
+            .then(|| canvas.active_header_footer_selection.as_sorted_char_range())
+            .filter(|range| range.start < range.end);
+        paint_tab_aligned_margin_runs(
+            ui.painter(),
+            &edited_runs,
+            canvas.zoom,
+            Color32::from_rgb(36, 39, 46),
+            editor_rect,
+            selection,
+        );
+    }
+
+    if has_focus {
+        let cursor_pos = header_footer_cursor_pos(
+            ui.painter(),
+            &edited_runs,
+            canvas.zoom,
+            editor_rect,
+            canvas.active_header_footer_cursor,
+        );
+        let time = ui.input(|input| input.time) - canvas.last_interaction_time;
+        paint_text_cursor(
+            ui,
+            ui.painter(),
+            Rect::from_min_size(cursor_pos, egui::vec2(1.5, editor_height * 0.85)),
+            time,
+        );
+    }
+
+    if changed && edited_runs != before_runs {
+        normalize_header_footer_runs(&mut edited_runs);
+        *active_header_footer_runs_mut(document, active) = edited_runs;
+        *active_header_footer_text_mut(document, active) =
+            runs_plain_text(active_header_footer_runs(document, active));
+        canvas.active_style = header_footer_style_at(
+            active_header_footer_runs(document, active),
+            canvas.active_header_footer_selection.primary.index,
+        );
+        true
+    } else {
+        false
+    }
+}
+
+fn handle_header_footer_keyboard_input(
+    ui: &egui::Ui,
+    runs: &mut Vec<TextRun>,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+    document: &DocumentState,
+) -> bool {
+    let mut changed = false;
+    let events = ui.input(|input| input.events.clone());
+    for event in events {
+        match event {
+            egui::Event::Copy => {
+                copy_header_footer_selection(ui, runs, canvas);
+            }
+            egui::Event::Cut => {
+                if copy_header_footer_selection(ui, runs, canvas) {
+                    history.checkpoint(document, ui.input(|input| input.time));
+                    let selected = canvas.active_header_footer_selection.as_sorted_char_range();
+                    delete_header_footer_range(runs, selected.clone());
+                    canvas.active_header_footer_selection =
+                        CCursorRange::one(CCursor::new(selected.start));
+                    canvas.active_header_footer_cursor = selected.start;
+                    changed = true;
+                }
+            }
+            egui::Event::Text(inserted) if !inserted.is_empty() => {
+                history.checkpoint_coalesced(document, ui.input(|input| input.time));
+                let selected = canvas.active_header_footer_selection.as_sorted_char_range();
+                let next = replace_header_footer_range_with_text(
+                    runs,
+                    selected,
+                    &inserted,
+                    canvas.active_style,
+                );
+                canvas.active_header_footer_selection = CCursorRange::one(CCursor::new(next));
+                canvas.active_header_footer_cursor = next;
+                changed = true;
+            }
+            egui::Event::Paste(pasted) => {
+                history.checkpoint(document, ui.input(|input| input.time));
+                let selected = canvas.active_header_footer_selection.as_sorted_char_range();
+                let next = replace_header_footer_range_with_text(
+                    runs,
+                    selected,
+                    &pasted,
+                    canvas.active_style,
+                );
+                canvas.active_header_footer_selection = CCursorRange::one(CCursor::new(next));
+                canvas.active_header_footer_cursor = next;
+                changed = true;
+            }
+            egui::Event::Key {
+                key: egui::Key::Tab,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                history.checkpoint(document, ui.input(|input| input.time));
+                let next_cursor = if modifiers.shift {
+                    remove_previous_header_footer_tab(
+                        runs,
+                        canvas.active_header_footer_selection.as_sorted_char_range(),
+                    )
+                } else {
+                    insert_header_footer_tab(
+                        runs,
+                        canvas.active_header_footer_selection.as_sorted_char_range(),
+                        canvas.active_style,
+                    )
+                };
+                if let Some(next_cursor) = next_cursor {
+                    canvas.active_header_footer_selection =
+                        CCursorRange::one(CCursor::new(next_cursor));
+                    canvas.active_header_footer_cursor = next_cursor;
+                    changed = true;
+                }
+            }
+            egui::Event::Key {
+                key: egui::Key::Backspace,
+                pressed: true,
+                ..
+            } => {
+                let selected = canvas.active_header_footer_selection.as_sorted_char_range();
+                if selected.start < selected.end {
+                    history.checkpoint_coalesced(document, ui.input(|input| input.time));
+                    delete_header_footer_range(runs, selected.clone());
+                    canvas.active_header_footer_selection =
+                        CCursorRange::one(CCursor::new(selected.start));
+                    canvas.active_header_footer_cursor = selected.start;
+                    changed = true;
+                } else if canvas.active_header_footer_cursor > 0 {
+                    history.checkpoint_coalesced(document, ui.input(|input| input.time));
+                    let start = canvas.active_header_footer_cursor - 1;
+                    delete_header_footer_range(runs, start..canvas.active_header_footer_cursor);
+                    canvas.active_header_footer_selection = CCursorRange::one(CCursor::new(start));
+                    canvas.active_header_footer_cursor = start;
+                    changed = true;
+                }
+            }
+            egui::Event::Key {
+                key: egui::Key::Delete,
+                pressed: true,
+                ..
+            } => {
+                let selected = canvas.active_header_footer_selection.as_sorted_char_range();
+                if selected.start < selected.end {
+                    history.checkpoint_coalesced(document, ui.input(|input| input.time));
+                    delete_header_footer_range(runs, selected.clone());
+                    canvas.active_header_footer_selection =
+                        CCursorRange::one(CCursor::new(selected.start));
+                    canvas.active_header_footer_cursor = selected.start;
+                    changed = true;
+                } else {
+                    let total_chars = runs_total_chars(runs);
+                    if canvas.active_header_footer_cursor < total_chars {
+                        history.checkpoint_coalesced(document, ui.input(|input| input.time));
+                        delete_header_footer_range(
+                            runs,
+                            canvas.active_header_footer_cursor
+                                ..canvas.active_header_footer_cursor + 1,
+                        );
+                        changed = true;
+                    }
+                }
+            }
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                if handle_header_footer_shortcut_key(
+                    ui, document, canvas, history, runs, key, modifiers,
+                ) {
+                    changed = true;
+                    continue;
+                }
+                match key {
+                    egui::Key::ArrowLeft => {
+                        let next = canvas.active_header_footer_cursor.saturating_sub(1);
+                        set_header_footer_cursor(canvas, next, modifiers.shift);
+                    }
+                    egui::Key::ArrowRight => {
+                        let next =
+                            (canvas.active_header_footer_cursor + 1).min(runs_total_chars(runs));
+                        set_header_footer_cursor(canvas, next, modifiers.shift);
+                    }
+                    egui::Key::Home => {
+                        set_header_footer_cursor(canvas, 0, modifiers.shift);
+                    }
+                    egui::Key::End => {
+                        set_header_footer_cursor(canvas, runs_total_chars(runs), modifiers.shift);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+fn handle_header_footer_shortcut_key(
+    ui: &egui::Ui,
+    document: &DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+    runs: &mut Vec<TextRun>,
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+) -> bool {
+    if !modifiers.command {
+        return false;
+    }
+
+    match key {
+        egui::Key::A => {
+            let total_chars = runs_total_chars(runs);
+            canvas.active_header_footer_selection =
+                CCursorRange::two(CCursor::new(0), CCursor::new(total_chars));
+            canvas.active_header_footer_cursor = total_chars;
+            false
+        }
+        egui::Key::B => {
+            history.checkpoint(document, ui.input(|input| input.time));
+            let next = !canvas.active_style.bold;
+            apply_header_footer_style_change(runs, canvas, |style| style.bold = next)
+        }
+        egui::Key::I => {
+            history.checkpoint(document, ui.input(|input| input.time));
+            let next = !canvas.active_style.italic;
+            apply_header_footer_style_change(runs, canvas, |style| style.italic = next)
+        }
+        egui::Key::U => {
+            history.checkpoint(document, ui.input(|input| input.time));
+            let next = !canvas.active_style.underline;
+            apply_header_footer_style_change(runs, canvas, |style| style.underline = next)
+        }
+        _ => false,
+    }
+}
+
+fn apply_header_footer_style_change(
+    runs: &mut Vec<TextRun>,
+    canvas: &mut CanvasState,
+    mutate: impl Fn(&mut CharacterStyle) + Copy,
+) -> bool {
+    let selected = canvas.active_header_footer_selection.as_sorted_char_range();
+    let changed = if selected.start < selected.end {
+        apply_style_to_header_footer_range(runs, selected, mutate);
+        true
+    } else {
+        false
+    };
+    mutate(&mut canvas.active_style);
+    changed
+}
+
+fn set_header_footer_cursor(canvas: &mut CanvasState, cursor: usize, extend_selection: bool) {
+    canvas.active_header_footer_cursor = cursor;
+    if extend_selection {
+        canvas.active_header_footer_selection.primary = CCursor::new(cursor);
+    } else {
+        canvas.active_header_footer_selection = CCursorRange::one(CCursor::new(cursor));
+    }
+}
+
+fn copy_header_footer_selection(ui: &egui::Ui, runs: &[TextRun], canvas: &CanvasState) -> bool {
+    let selected = canvas.active_header_footer_selection.as_sorted_char_range();
+    if selected.start >= selected.end {
+        return false;
+    }
+    ui.copy_text(selected_header_footer_text(runs, selected));
+    true
+}
+
+fn selected_header_footer_text(runs: &[TextRun], range: std::ops::Range<usize>) -> String {
+    runs_plain_text(runs)
+        .chars()
+        .skip(range.start)
+        .take(range.end.saturating_sub(range.start))
+        .collect()
+}
+
+fn insert_header_footer_tab(
+    runs: &mut Vec<TextRun>,
+    range: std::ops::Range<usize>,
+    style: CharacterStyle,
+) -> Option<usize> {
+    let plain = runs_plain_text(runs);
+    let tab_count_before_cursor = plain
+        .chars()
+        .take(range.start)
+        .filter(|ch| *ch == '\t')
+        .count();
+    if tab_count_before_cursor >= 2 {
+        return None;
+    }
+
+    Some(replace_header_footer_range_with_text(
+        runs, range, "\t", style,
+    ))
+}
+
+fn remove_previous_header_footer_tab(
+    runs: &mut Vec<TextRun>,
+    range: std::ops::Range<usize>,
+) -> Option<usize> {
+    if range.start < range.end {
+        delete_header_footer_range(runs, range.clone());
+        return Some(range.start);
+    }
+
+    let plain = runs_plain_text(runs);
+    let previous_tab = plain
+        .chars()
+        .take(range.start)
+        .enumerate()
+        .filter_map(|(index, ch)| (ch == '\t').then_some(index))
+        .last()?;
+    delete_header_footer_range(runs, previous_tab..previous_tab + 1);
+    Some(previous_tab)
+}
+
+fn char_to_byte_index_for_header_footer(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .nth(char_index)
+        .map(|(byte_index, _)| byte_index)
+        .unwrap_or(text.len())
+}
+
+fn runs_plain_text(runs: &[TextRun]) -> String {
+    runs.iter().map(|run| run.text.as_str()).collect()
+}
+
+fn runs_total_chars(runs: &[TextRun]) -> usize {
+    runs.iter().map(|run| run.text.chars().count()).sum()
+}
+
+fn slice_run_text_chars(text: &str, range: std::ops::Range<usize>) -> String {
+    text.chars()
+        .skip(range.start)
+        .take(range.end.saturating_sub(range.start))
+        .collect()
+}
+
+fn header_footer_style_at(runs: &[TextRun], char_index: usize) -> CharacterStyle {
+    let total = runs_total_chars(runs);
+    let target = char_index.min(total);
+    let mut offset = 0usize;
+    for run in runs {
+        let len = run.text.chars().count();
+        if target < offset + len {
+            return run.style;
+        }
+        offset += len;
+    }
+    runs.last().map(|run| run.style).unwrap_or_default()
+}
+
+fn normalize_header_footer_runs(runs: &mut Vec<TextRun>) {
+    runs.retain(|run| !run.text.is_empty());
+    let mut normalized: Vec<TextRun> = Vec::with_capacity(runs.len().max(1));
+    for run in runs.drain(..) {
+        if let Some(last) = normalized.last_mut() {
+            if last.style == run.style {
+                last.text.push_str(&run.text);
+                continue;
+            }
+        }
+        normalized.push(run);
+    }
+    if normalized.is_empty() {
+        normalized.push(TextRun {
+            text: String::new(),
+            style: CharacterStyle::default(),
+        });
+    }
+    *runs = normalized;
+}
+
+fn split_header_footer_runs_at(runs: &mut Vec<TextRun>, char_index: usize) {
+    if char_index == 0 || char_index >= runs_total_chars(runs) {
+        return;
+    }
+
+    let mut offset = 0usize;
+    for idx in 0..runs.len() {
+        let len = runs[idx].text.chars().count();
+        if char_index > offset && char_index < offset + len {
+            let local = char_index - offset;
+            let byte_index = char_to_byte_index_for_header_footer(&runs[idx].text, local);
+            let right = runs[idx].text.split_off(byte_index);
+            let style = runs[idx].style;
+            runs.insert(idx + 1, TextRun { text: right, style });
+            break;
+        }
+        offset += len;
+    }
+}
+
+fn replace_header_footer_range_with_text(
+    runs: &mut Vec<TextRun>,
+    range: std::ops::Range<usize>,
+    text: &str,
+    style: CharacterStyle,
+) -> usize {
+    let start = range.start.min(runs_total_chars(runs));
+    let end = range.end.min(runs_total_chars(runs));
+    delete_header_footer_range(runs, start..end);
+    insert_header_footer_text(runs, start, text, style);
+    start + text.chars().count()
+}
+
+fn insert_header_footer_text(
+    runs: &mut Vec<TextRun>,
+    char_index: usize,
+    text: &str,
+    style: CharacterStyle,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let insertion_index = char_index.min(runs_total_chars(runs));
+    split_header_footer_runs_at(runs, insertion_index);
+
+    let mut offset = 0usize;
+    let mut target = runs.len();
+    for (idx, run) in runs.iter().enumerate() {
+        if offset == insertion_index {
+            target = idx;
+            break;
+        }
+        offset += run.text.chars().count();
+    }
+    runs.insert(
+        target,
+        TextRun {
+            text: text.to_owned(),
+            style,
+        },
+    );
+    normalize_header_footer_runs(runs);
+}
+
+fn delete_header_footer_range(runs: &mut Vec<TextRun>, range: std::ops::Range<usize>) {
+    if range.start >= range.end {
+        return;
+    }
+    let start = range.start.min(runs_total_chars(runs));
+    let end = range.end.min(runs_total_chars(runs));
+    split_header_footer_runs_at(runs, start);
+    split_header_footer_runs_at(runs, end);
+
+    let mut offset = 0usize;
+    runs.retain(|run| {
+        let len = run.text.chars().count();
+        let keep = offset + len <= start || offset >= end;
+        offset += len;
+        keep
+    });
+    normalize_header_footer_runs(runs);
+}
+
+fn apply_style_to_header_footer_range(
+    runs: &mut Vec<TextRun>,
+    range: std::ops::Range<usize>,
+    mutate: impl Fn(&mut CharacterStyle) + Copy,
+) {
+    let start = range.start.min(runs_total_chars(runs));
+    let end = range.end.min(runs_total_chars(runs));
+    if start >= end {
+        return;
+    }
+    split_header_footer_runs_at(runs, start);
+    split_header_footer_runs_at(runs, end);
+
+    let mut offset = 0usize;
+    for run in runs.iter_mut() {
+        let len = run.text.chars().count();
+        if offset >= start && offset + len <= end {
+            mutate(&mut run.style);
+        }
+        offset += len;
+    }
+    normalize_header_footer_runs(runs);
+}
+
+fn header_footer_cursor_pos(
+    painter: &egui::Painter,
+    runs: &[TextRun],
+    zoom: f32,
+    rect: Rect,
+    cursor: usize,
+) -> egui::Pos2 {
+    let segments = split_runs_for_header_tabs(runs);
+    let mut slot = 0usize;
+    for (idx, segment) in segments.iter().enumerate() {
+        if cursor <= segment.end || idx + 1 == segments.len() {
+            slot = idx;
+            break;
+        }
+    }
+    let segment = segments.get(slot);
+    let full_width = segment
+        .map(|segment| measure_runs_width(painter, &segment.runs, zoom))
+        .unwrap_or(0.0);
+    let prefix_width = segment
+        .map(|segment| measure_segment_prefix_width(painter, segment, cursor, zoom))
+        .unwrap_or(0.0);
+    let segment_left = match slot {
+        0 => rect.left(),
+        1 => rect.center().x - full_width * 0.5,
+        _ => rect.right() - full_width,
+    };
+    egui::pos2(segment_left + prefix_width, rect.top())
+}
+
+fn header_footer_cursor_from_pos(
+    painter: &egui::Painter,
+    runs: &[TextRun],
+    zoom: f32,
+    rect: Rect,
+    x: f32,
+) -> usize {
+    let total_chars = runs_total_chars(runs);
+    (0..=total_chars)
+        .min_by(|left, right| {
+            let left_x = header_footer_cursor_pos(painter, runs, zoom, rect, *left).x;
+            let right_x = header_footer_cursor_pos(painter, runs, zoom, rect, *right).x;
+            (left_x - x)
+                .abs()
+                .partial_cmp(&(right_x - x).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(total_chars)
+}
+
+fn measure_segment_prefix_width(
+    painter: &egui::Painter,
+    segment: &HeaderSegment,
+    cursor: usize,
+    zoom: f32,
+) -> f32 {
+    let mut width = 0.0;
+    for piece in &segment.runs {
+        let Some(range) = piece.range.clone() else {
+            continue;
+        };
+        if cursor >= range.end {
+            width += measure_text_width(painter, &piece.text, piece.style, zoom);
+        } else if cursor > range.start {
+            let prefix = slice_run_text_chars(&piece.text, 0..cursor - range.start);
+            width += measure_text_width(painter, &prefix, piece.style, zoom);
+            break;
+        } else {
+            break;
+        }
+    }
+    width
+}
+
+fn active_header_footer_runs(document: &DocumentState, active: ActiveHeaderFooter) -> &[TextRun] {
+    let first_page = document.different_first_page && active.page_number == 1;
+    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
+    match (active.kind, first_page, even_page) {
+        (HeaderFooterKind::Header, true, _) => &document.first_page_header_runs,
+        (HeaderFooterKind::Footer, true, _) => &document.first_page_footer_runs,
+        (HeaderFooterKind::Header, _, true) => &document.even_page_header_runs,
+        (HeaderFooterKind::Footer, _, true) => &document.even_page_footer_runs,
+        (HeaderFooterKind::Header, _, _) => &document.header_runs,
+        (HeaderFooterKind::Footer, _, _) => &document.footer_runs,
+    }
+}
+
+fn active_header_footer_text_mut(
+    document: &mut DocumentState,
+    active: ActiveHeaderFooter,
+) -> &mut String {
+    let first_page = document.different_first_page && active.page_number == 1;
+    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
+    match (active.kind, first_page, even_page) {
+        (HeaderFooterKind::Header, true, _) => &mut document.first_page_header_text,
+        (HeaderFooterKind::Footer, true, _) => &mut document.first_page_footer_text,
+        (HeaderFooterKind::Header, _, true) => &mut document.even_page_header_text,
+        (HeaderFooterKind::Footer, _, true) => &mut document.even_page_footer_text,
+        (HeaderFooterKind::Header, _, _) => &mut document.header_text,
+        (HeaderFooterKind::Footer, _, _) => &mut document.footer_text,
+    }
+}
+
+fn active_header_footer_runs_mut(
+    document: &mut DocumentState,
+    active: ActiveHeaderFooter,
+) -> &mut Vec<TextRun> {
+    let first_page = document.different_first_page && active.page_number == 1;
+    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
+    match (active.kind, first_page, even_page) {
+        (HeaderFooterKind::Header, true, _) => &mut document.first_page_header_runs,
+        (HeaderFooterKind::Footer, true, _) => &mut document.first_page_footer_runs,
+        (HeaderFooterKind::Header, _, true) => &mut document.even_page_header_runs,
+        (HeaderFooterKind::Footer, _, true) => &mut document.even_page_footer_runs,
+        (HeaderFooterKind::Header, _, _) => &mut document.header_runs,
+        (HeaderFooterKind::Footer, _, _) => &mut document.footer_runs,
+    }
+}
+
+fn page_header_rect(page_rect: Rect, document: &DocumentState, canvas: &CanvasState) -> Rect {
+    let height = document_points_to_screen_points(document.margins.top_points, canvas.zoom)
+        .clamp(18.0, page_rect.height() * 0.25);
+    Rect::from_min_size(page_rect.min, egui::vec2(page_rect.width(), height))
+}
+
+fn page_footer_rect(page_rect: Rect, document: &DocumentState, canvas: &CanvasState) -> Rect {
+    let height = document_points_to_screen_points(document.margins.bottom_points, canvas.zoom)
+        .clamp(18.0, page_rect.height() * 0.25);
+    Rect::from_min_max(
+        egui::pos2(page_rect.left(), page_rect.bottom() - height),
+        page_rect.max,
+    )
 }
 
 fn update_canvas_hover_cursor(
@@ -1458,6 +2582,39 @@ mod tests {
             paragraph_tables: vec![None; paragraph_count],
             page_size: PageSize::a4(),
             margins: PageMargins::standard(),
+            header_text: String::new(),
+            footer_text: String::new(),
+            first_page_header_text: String::new(),
+            first_page_footer_text: String::new(),
+            even_page_header_text: String::new(),
+            even_page_footer_text: String::new(),
+            header_runs: vec![TextRun {
+                text: String::new(),
+                style: CharacterStyle::default(),
+            }],
+            footer_runs: vec![TextRun {
+                text: String::new(),
+                style: CharacterStyle::default(),
+            }],
+            first_page_header_runs: vec![TextRun {
+                text: String::new(),
+                style: CharacterStyle::default(),
+            }],
+            first_page_footer_runs: vec![TextRun {
+                text: String::new(),
+                style: CharacterStyle::default(),
+            }],
+            even_page_header_runs: vec![TextRun {
+                text: String::new(),
+                style: CharacterStyle::default(),
+            }],
+            even_page_footer_runs: vec![TextRun {
+                text: String::new(),
+                style: CharacterStyle::default(),
+            }],
+            different_first_page: false,
+            different_odd_even_pages: false,
+            page_number_start: 1,
         }
     }
 
