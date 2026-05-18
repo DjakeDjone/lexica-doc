@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Wors
+Comment=Minimal desktop document editor
+Exec=wors %f
+TryExec=wors
+Icon=wors
+Terminal=false
+Categories=Office;WordProcessor;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;text/markdown;text/plain;
+StartupNotify=true

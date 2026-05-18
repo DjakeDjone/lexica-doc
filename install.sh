@@ -69,11 +69,12 @@ Version=1.0
 Type=Application
 Name=${APP_NAME}
 Comment=Minimal desktop document editor
-Exec=${INSTALL_ROOT}/bin/${BIN_NAME}
+Exec=${INSTALL_ROOT}/bin/${BIN_NAME} %f
 TryExec=${INSTALL_ROOT}/bin/${BIN_NAME}
 Icon=${ICON_FILE}
 Terminal=false
 Categories=Office;WordProcessor;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;text/markdown;text/plain;
 StartupNotify=true
 EOF
 
