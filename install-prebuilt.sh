@@ -145,6 +145,46 @@ fi
 mkdir -p "$install_bin_dir"
 install -m 755 "$binary_path" "${install_bin_dir}/${BIN_NAME}"
 
+# Install .desktop file and icon for file association (Open With)
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+DESKTOP_DIR="${XDG_DATA_HOME}/applications"
+ICON_DIR="${XDG_DATA_HOME}/icons/hicolor/256x256/apps"
+DESKTOP_FILE="${DESKTOP_DIR}/${BIN_NAME}.desktop"
+ICON_FILE="${ICON_DIR}/${BIN_NAME}.png"
+
+mkdir -p "$DESKTOP_DIR" "$ICON_DIR"
+
+# Copy logo from extracted artifact if present
+if [[ -f "${extract_dir}/logo.png" ]]; then
+  cp "${extract_dir}/logo.png" "$ICON_FILE"
+  chmod 644 "$ICON_FILE"
+fi
+
+cat >"$DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Wors
+Comment=Minimal desktop document editor
+Exec=${install_bin_dir}/${BIN_NAME} %f
+TryExec=${install_bin_dir}/${BIN_NAME}
+Icon=${ICON_FILE}
+Terminal=false
+Categories=Office;WordProcessor;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;text/markdown;text/plain;
+StartupNotify=true
+EOF
+
+chmod 644 "$DESKTOP_FILE"
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -q "${XDG_DATA_HOME}/icons/hicolor" >/dev/null 2>&1 || true
+fi
+
 echo "Installed ${BIN_NAME} to ${install_bin_dir}/${BIN_NAME}."
 if [[ ":${PATH}:" != *":${install_bin_dir}:"* ]]; then
   echo "Add ${install_bin_dir} to your PATH to run ${BIN_NAME}."
