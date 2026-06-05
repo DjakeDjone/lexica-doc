@@ -10,8 +10,8 @@ use zip::ZipArchive;
 
 use crate::document::{
     CharacterStyle, DocumentImage, DocumentTable, FontChoice, LineSpacing, LineSpacingKind,
-    ListKind, PageMargins, PageSize, ParagraphAlignment, ParagraphStyle, TableCell, TextRun,
-    OBJECT_REPLACEMENT_CHAR,
+    ListKind, PageMargins, PageSetup, PageSize, ParagraphAlignment, ParagraphStyle, Section,
+    TableCell, TextRun, OBJECT_REPLACEMENT_CHAR,
 };
 use serde::Serialize;
 
@@ -30,6 +30,8 @@ pub struct ImportedDocx {
     pub paragraph_tables: Vec<Option<DocumentTable>>,
     pub page_size: Option<PageSize>,
     pub margins: Option<PageMargins>,
+    pub different_odd_even_pages: bool,
+    pub sections: Vec<Section>,
 }
 
 pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
@@ -44,17 +46,44 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
         .map_err(|error| format!("failed to read word/document.xml: {error}"))?;
 
     let numbering = load_numbering_definitions(&mut archive)?;
+    let different_odd_even_pages = load_even_and_odd_setting(&mut archive)?;
     let theme_fonts = load_theme_fonts(&mut archive)?;
     let styles = load_styles(&mut archive, &theme_fonts)?;
     let relationships = load_document_relationships(&mut archive)?;
     let media = load_media_store(&mut archive, &relationships)?;
-    parse_document_xml(
+    let mut imported = parse_document_xml(
         &document_xml,
         &numbering,
         &styles,
         &theme_fonts,
         &relationships,
         &media,
+    )?;
+    imported.different_odd_even_pages = different_odd_even_pages;
+    if imported.sections.is_empty() {
+        let mut setup = PageSetup::standard();
+        if let Some(page_size) = imported.page_size {
+            setup.page_size = page_size;
+        }
+        if let Some(margins) = imported.margins {
+            setup.margins = margins;
+        }
+        imported.sections.push(Section::first(setup));
+    }
+    Ok(imported)
+}
+
+fn load_even_and_odd_setting(archive: &mut ZipArchive<Cursor<&[u8]>>) -> Result<bool, String> {
+    let Ok(mut settings_file) = archive.by_name("word/settings.xml") else {
+        return Ok(false);
+    };
+    let mut settings_xml = String::new();
+    settings_file
+        .read_to_string(&mut settings_xml)
+        .map_err(|error| format!("failed to read word/settings.xml: {error}"))?;
+    Ok(
+        settings_xml.contains("<w:evenAndOddHeaders")
+            || settings_xml.contains("<evenAndOddHeaders"),
     )
 }
 
@@ -502,6 +531,8 @@ fn parse_document_xml(
         paragraph_tables,
         page_size,
         margins,
+        different_odd_even_pages: false,
+        sections: Vec::new(),
     })
 }
 

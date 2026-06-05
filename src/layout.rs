@@ -1,6 +1,6 @@
 use egui::{pos2, vec2, Rect, Vec2};
 
-use crate::document::{PageMargins, PageSize};
+use crate::document::{PageMargins, PageSetup, PageSize};
 
 pub fn viewport_scale(pixels_per_point: f32, zoom: f32) -> f32 {
     pixels_per_point * zoom
@@ -49,7 +49,34 @@ pub fn page_content_rect(page_rect: Rect, margins: PageMargins, zoom: f32) -> Re
     )
 }
 
+pub fn section_page_content_rect(
+    page_rect: Rect,
+    setup: PageSetup,
+    header_story_height_points: f32,
+    footer_story_height_points: f32,
+    zoom: f32,
+) -> Rect {
+    let left = document_points_to_screen_points(setup.margins.left_points, zoom);
+    let right = document_points_to_screen_points(setup.margins.right_points, zoom);
+    let header_occupied = setup
+        .margins
+        .top_points
+        .max(setup.header_from_top_points + header_story_height_points);
+    let footer_occupied = setup
+        .margins
+        .bottom_points
+        .max(setup.footer_from_bottom_points + footer_story_height_points);
+    let top = document_points_to_screen_points(header_occupied, zoom);
+    let bottom = document_points_to_screen_points(footer_occupied, zoom);
+    let min_height = document_points_to_screen_points(12.0, zoom).max(1.0);
+    let max_y = (page_rect.bottom() - bottom).max(page_rect.top() + top + min_height);
+
+    Rect::from_min_max(
+        pos2(page_rect.left() + left, page_rect.top() + top),
+        pos2(page_rect.right() - right, max_y),
+    )
+}
+
 pub fn screen_points_to_document_points(screen_points: f32, zoom: f32) -> f32 {
     screen_points / zoom
 }
-

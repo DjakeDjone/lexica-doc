@@ -3,22 +3,24 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::document::{
-    CharacterStyle, DocumentState, FontChoice, ImageLayoutMode, ImageRendering, ListKind,
-    ParagraphAlignment, TextRun, WrapMode, OBJECT_REPLACEMENT_CHAR,
+    DocumentState, FontChoice, HeaderFooterKind, HeaderFooterVariant, ImageLayoutMode,
+    ImageRendering, ListKind, PageMargins, PageSetup, PageSize, ParagraphAlignment, TextRun,
+    WrapMode, OBJECT_REPLACEMENT_CHAR,
 };
 use crate::grammar::{GrammarConfig, GrammarStatus, Language};
 
 use super::{
     actions::{
-        delete_table_column, delete_table_row, insert_image, insert_page_break, insert_table,
-        insert_table_column, insert_table_row, open_document, reset_image_size, save_document,
-        save_document_as, set_font_choice, set_font_size, set_highlight_color, set_image_opacity,
-        set_image_rendering, set_image_wrap_mode, set_paragraph_alignment, set_text_color,
-        sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
-        toggle_strikethrough, toggle_underline,
+        delete_table_column, delete_table_row, insert_image, insert_page_break,
+        insert_section_break, insert_table, insert_table_column, insert_table_row, open_document,
+        reset_image_size, save_document, save_document_as, set_font_choice, set_font_size,
+        set_highlight_color, set_image_opacity, set_image_rendering, set_image_wrap_mode,
+        set_paragraph_alignment, set_text_color, sync_active_style, toggle_bold,
+        toggle_bullet_list, toggle_italic, toggle_ordered_list, toggle_strikethrough,
+        toggle_underline,
     },
     palette::{theme_switch, ThemeMode, ThemePalette},
-    ActiveHeaderFooter, CanvasState, ChangeHistory, HeaderFooterKind, ZoomMode,
+    ActiveHeaderFooter, CanvasState, ChangeHistory, ZoomMode,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -29,8 +31,27 @@ pub(super) enum RibbonTab {
     Layout,
     View,
     Grammer,
+    HeaderFooter,
     Picture,
     Table,
+}
+
+fn current_section_id(
+    document: &DocumentState,
+    canvas: &CanvasState,
+) -> crate::document::SectionId {
+    if let Some(active) = canvas.active_header_footer {
+        return active.section_id;
+    }
+    let paragraph_index = document
+        .paragraphs()
+        .iter()
+        .position(|paragraph| {
+            paragraph.range.contains(&canvas.selection.primary.index)
+                || paragraph.range.start == canvas.selection.primary.index
+        })
+        .unwrap_or(0);
+    document.section_at_paragraph(paragraph_index).id
 }
 
 impl RibbonTab {
@@ -51,6 +72,7 @@ impl RibbonTab {
             Self::Layout => "Layout",
             Self::View => "View",
             Self::Grammer => "Grammer",
+            Self::HeaderFooter => "Header & Footer",
             Self::Picture => "Picture Format",
             Self::Table => "Table Format",
         }
@@ -253,6 +275,7 @@ pub(super) fn paint_tab_row(
     active_tab: &mut RibbonTab,
     selected_image_id: Option<usize>,
     active_table_cell: Option<(usize, usize, usize)>,
+    active_header_footer: bool,
     palette: ThemePalette,
 ) -> bool {
     let mut file_requested = false;
@@ -298,6 +321,38 @@ pub(super) fn paint_tab_row(
                         .corner_radius(0.0);
                     if ui.add(button).clicked() {
                         *active_tab = tab;
+                    }
+                }
+
+                if active_header_footer {
+                    ui.separator();
+                    let selected = *active_tab == RibbonTab::HeaderFooter;
+                    let fg = if selected {
+                        palette.tab_active_fg
+                    } else {
+                        palette.tab_fg
+                    };
+                    let bg = if selected {
+                        palette.tab_active_bg
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    let button = egui::Button::new(
+                        egui::RichText::new("Header & Footer")
+                            .size(13.0)
+                            .color(fg)
+                            .strong(),
+                    )
+                    .min_size(egui::vec2(126.0, 28.0))
+                    .fill(bg)
+                    .stroke(if selected {
+                        egui::Stroke::new(1.0, palette.accent)
+                    } else {
+                        egui::Stroke::NONE
+                    })
+                    .corner_radius(0.0);
+                    if ui.add(button).clicked() {
+                        *active_tab = RibbonTab::HeaderFooter;
                     }
                 }
 
@@ -393,7 +448,7 @@ pub(super) fn paint_ribbon(
     let mut output = GrammarRibbonOutput::default();
 
     egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(8, 8))
+        .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| match active_tab {
                 RibbonTab::Home => {
@@ -419,17 +474,22 @@ pub(super) fn paint_ribbon(
                     ribbon_color_group(ui, document, canvas, history, palette);
                 }
                 RibbonTab::Layout => {
-                    ribbon_header_footer_group(ui, document, status_message, history, palette);
-                    ribbon_view_group(ui, canvas, status_message, theme_mode, palette);
-                    ribbon_info_group(
+                    ribbon_page_setup_group(ui, document, canvas, status_message, history, palette);
+                    ribbon_flow_group(ui, document, canvas, status_message, history, palette);
+                    ribbon_layout_header_footer_group(
                         ui,
-                        "Page",
-                        &format!(
-                            "A4 {} x {} pt, margins {} pt",
-                            document.page_size.width_points as i32,
-                            document.page_size.height_points as i32,
-                            document.margins.top_points as i32
-                        ),
+                        document,
+                        canvas,
+                        status_message,
+                        history,
+                        palette,
+                    );
+                    ribbon_advanced_page_setup_group(
+                        ui,
+                        document,
+                        canvas,
+                        status_message,
+                        history,
                         palette,
                     );
                 }
@@ -476,6 +536,40 @@ pub(super) fn paint_ribbon(
                     ribbon_color_group(ui, document, canvas, history, palette);
                     ribbon_insert_group(ui, document, canvas, status_message, history, palette);
                     table_format_group(ui, document, canvas, status_message, history, palette);
+                }
+                RibbonTab::HeaderFooter => {
+                    ribbon_header_footer_insert_group(
+                        ui,
+                        document,
+                        canvas,
+                        status_message,
+                        history,
+                        palette,
+                    );
+                    ribbon_header_footer_options_group(
+                        ui,
+                        document,
+                        canvas,
+                        status_message,
+                        history,
+                        palette,
+                    );
+                    ribbon_header_footer_position_group(
+                        ui,
+                        document,
+                        canvas,
+                        status_message,
+                        history,
+                        palette,
+                    );
+                    ribbon_header_footer_actions_group(
+                        ui,
+                        document,
+                        canvas,
+                        status_message,
+                        history,
+                        palette,
+                    );
                 }
             });
         });
@@ -566,6 +660,16 @@ pub(super) fn paint_status_bar(
                 egui::RichText::new(format!("{:.0}%", canvas.zoom * 100.0))
                     .size(11.0)
                     .color(palette.text_muted),
+            );
+            ui.separator();
+            let setup = document.default_page_setup();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{:.0} x {:.0} pt",
+                    setup.page_size.width_points, setup.page_size.height_points
+                ))
+                .size(11.0)
+                .color(palette.text_muted),
             );
         });
     });
@@ -660,13 +764,22 @@ fn ribbon_insert_group(
         if ui.button("Page Break").clicked() {
             insert_page_break(document, canvas, status_message, history);
         }
+        if ui.button("Section Break").clicked() {
+            insert_section_break(document, canvas, status_message, history);
+        }
         if ui.button("Header").clicked() {
+            let section_id = current_section_id(document, canvas);
+            let variant = HeaderFooterVariant::Default;
             canvas.active_header_footer = Some(ActiveHeaderFooter {
                 kind: HeaderFooterKind::Header,
+                section_id,
+                variant,
                 page_number: 1,
             });
             canvas.active_header_footer_cursor = document
-                .header_runs
+                .resolve_header_footer_slot(section_id, HeaderFooterKind::Header, variant)
+                .story
+                .runs
                 .iter()
                 .map(|run| run.text.chars().count())
                 .sum();
@@ -676,12 +789,18 @@ fn ribbon_insert_group(
             *status_message = "Editing header".to_owned();
         }
         if ui.button("Footer").clicked() {
+            let section_id = current_section_id(document, canvas);
+            let variant = HeaderFooterVariant::Default;
             canvas.active_header_footer = Some(ActiveHeaderFooter {
                 kind: HeaderFooterKind::Footer,
+                section_id,
+                variant,
                 page_number: 1,
             });
             canvas.active_header_footer_cursor = document
-                .footer_runs
+                .resolve_header_footer_slot(section_id, HeaderFooterKind::Footer, variant)
+                .story
+                .runs
                 .iter()
                 .map(|run| run.text.chars().count())
                 .sum();
@@ -692,34 +811,44 @@ fn ribbon_insert_group(
         }
         if ui.button("Page Number").clicked() {
             history.checkpoint(document, ui.input(|i| i.time));
-            if document
-                .footer_runs
-                .iter()
-                .map(|run| run.text.as_str())
-                .collect::<String>()
-                .trim()
-                .is_empty()
-            {
-                document.footer_runs = vec![TextRun {
+            let (section_id, variant, kind) = canvas
+                .active_header_footer
+                .map(|active| (active.section_id, active.variant, active.kind))
+                .unwrap_or_else(|| {
+                    (
+                        current_section_id(document, canvas),
+                        HeaderFooterVariant::Default,
+                        HeaderFooterKind::Footer,
+                    )
+                });
+            let story = document
+                .header_footer_story_mut_materialized(section_id, kind, variant)
+                .expect("current section exists");
+            let text = story.plain_text();
+            if text.trim().is_empty() {
+                story.runs = vec![TextRun {
                     text: "Page { PAGE } of { NUMPAGES }".to_owned(),
                     style: canvas.active_style,
                 }];
             } else {
-                document.footer_runs.push(TextRun {
+                story.runs.push(TextRun {
                     text: " { PAGE }".to_owned(),
                     style: canvas.active_style,
                 });
             }
-            document.footer_text = document
-                .footer_runs
-                .iter()
-                .map(|run| run.text.as_str())
-                .collect();
+            document.sync_compat_from_first_section();
             canvas.active_header_footer = Some(ActiveHeaderFooter {
-                kind: HeaderFooterKind::Footer,
+                kind,
+                section_id,
+                variant,
                 page_number: 1,
             });
-            canvas.active_header_footer_cursor = document.footer_text.chars().count();
+            canvas.active_header_footer_cursor = document
+                .resolve_header_footer_slot(section_id, kind, variant)
+                .story
+                .plain_text()
+                .chars()
+                .count();
             canvas.active_header_footer_selection = egui::text_selection::CCursorRange::one(
                 egui::epaint::text::cursor::CCursor::new(canvas.active_header_footer_cursor),
             );
@@ -786,86 +915,830 @@ fn ribbon_insert_group(
     });
 }
 
-fn ribbon_header_footer_group(
+fn ribbon_page_setup_group(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
+    canvas: &mut CanvasState,
     status_message: &mut String,
     history: &mut ChangeHistory,
     palette: ThemePalette,
 ) {
-    ribbon_group(ui, "Header / Footer", palette, |ui| {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                let mut different_first = document.different_first_page;
-                if ui
-                    .checkbox(&mut different_first, "Different First Page")
-                    .changed()
-                {
-                    history.checkpoint(document, ui.input(|i| i.time));
-                    document.different_first_page = different_first;
-                    *status_message = "First page header/footer setting updated".to_owned();
-                }
-                let mut different_even = document.different_odd_even_pages;
-                if ui.checkbox(&mut different_even, "Odd & Even").changed() {
-                    history.checkpoint(document, ui.input(|i| i.time));
-                    document.different_odd_even_pages = different_even;
-                    *status_message = "Odd/even header/footer setting updated".to_owned();
-                }
-                ui.label("Start");
-                let mut page_start = document.page_number_start as i32;
-                let start_resp = ui.add(
-                    egui::DragValue::new(&mut page_start)
-                        .range(0..=9999)
-                        .speed(1.0),
+    ribbon_group(ui, "Page Setup", palette, |ui| {
+        ui.menu_button("Margins ▾", |ui| {
+            if ui.button("Normal").clicked() {
+                set_current_section_margins(
+                    document,
+                    canvas,
+                    history,
+                    status_message,
+                    PageMargins {
+                        top_points: 72.0,
+                        right_points: 72.0,
+                        bottom_points: 72.0,
+                        left_points: 72.0,
+                    },
+                    "Normal margins",
+                    ui.input(|i| i.time),
                 );
-                if start_resp.changed() {
-                    history.checkpoint_coalesced(document, ui.input(|i| i.time));
-                    document.page_number_start = page_start.max(0) as usize;
-                    *status_message = "Page number start updated".to_owned();
-                }
-            });
-            let mut header = document.header_text.clone();
-            let header_resp = ui.add_sized(
-                egui::vec2(220.0, 20.0),
-                egui::TextEdit::singleline(&mut header).hint_text("Odd/default header"),
-            );
-            if header_resp.changed() {
-                history.checkpoint_coalesced(document, ui.input(|i| i.time));
-                document.header_text = header;
-                document.header_runs = vec![TextRun {
-                    text: document.header_text.clone(),
-                    style: CharacterStyle::default(),
-                }];
-                *status_message = "Header updated".to_owned();
+                ui.close();
             }
-
-            let mut footer = document.footer_text.clone();
-            ui.horizontal(|ui| {
-                let footer_resp = ui.add_sized(
-                    egui::vec2(150.0, 20.0),
-                    egui::TextEdit::singleline(&mut footer).hint_text("Odd/default footer"),
+            if ui.button("Narrow").clicked() {
+                set_current_section_margins(
+                    document,
+                    canvas,
+                    history,
+                    status_message,
+                    PageMargins {
+                        top_points: 36.0,
+                        right_points: 36.0,
+                        bottom_points: 36.0,
+                        left_points: 36.0,
+                    },
+                    "Narrow margins",
+                    ui.input(|i| i.time),
                 );
-                if footer_resp.changed() {
-                    history.checkpoint_coalesced(document, ui.input(|i| i.time));
-                    document.footer_text = footer.clone();
-                    document.footer_runs = vec![TextRun {
-                        text: document.footer_text.clone(),
-                        style: CharacterStyle::default(),
-                    }];
-                    *status_message = "Footer updated".to_owned();
+                ui.close();
+            }
+            if ui.button("Moderate").clicked() {
+                set_current_section_margins(
+                    document,
+                    canvas,
+                    history,
+                    status_message,
+                    PageMargins {
+                        top_points: 72.0,
+                        right_points: 54.0,
+                        bottom_points: 72.0,
+                        left_points: 54.0,
+                    },
+                    "Moderate margins",
+                    ui.input(|i| i.time),
+                );
+                ui.close();
+            }
+            if ui.button("Wide").clicked() {
+                set_current_section_margins(
+                    document,
+                    canvas,
+                    history,
+                    status_message,
+                    PageMargins {
+                        top_points: 72.0,
+                        right_points: 144.0,
+                        bottom_points: 72.0,
+                        left_points: 144.0,
+                    },
+                    "Wide margins",
+                    ui.input(|i| i.time),
+                );
+                ui.close();
+            }
+        });
+
+        ui.menu_button("Size ▾", |ui| {
+            for (label, size) in page_size_presets() {
+                if ui.button(label).clicked() {
+                    set_current_section_page_size(
+                        document,
+                        canvas,
+                        history,
+                        status_message,
+                        size,
+                        label,
+                        ui.input(|i| i.time),
+                    );
+                    ui.close();
                 }
-                if ui.button("Page Count").clicked() {
-                    history.checkpoint(document, ui.input(|i| i.time));
-                    document.footer_text = "Page { PAGE } of { NUMPAGES }".to_owned();
-                    document.footer_runs = vec![TextRun {
-                        text: document.footer_text.clone(),
-                        style: CharacterStyle::default(),
-                    }];
-                    *status_message = "Footer page count inserted".to_owned();
-                }
-            });
+            }
+        });
+
+        ui.menu_button("Orientation ▾", |ui| {
+            if ui.button("Portrait").clicked() {
+                set_current_section_orientation(
+                    document,
+                    canvas,
+                    history,
+                    status_message,
+                    true,
+                    ui.input(|i| i.time),
+                );
+                ui.close();
+            }
+            if ui.button("Landscape").clicked() {
+                set_current_section_orientation(
+                    document,
+                    canvas,
+                    history,
+                    status_message,
+                    false,
+                    ui.input(|i| i.time),
+                );
+                ui.close();
+            }
         });
     });
+}
+
+fn ribbon_flow_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Flow", palette, |ui| {
+        ui.menu_button("Columns ▾", |ui| {
+            ui.add_enabled(false, egui::Button::new("One"));
+            ui.add_enabled(false, egui::Button::new("Two"));
+            ui.add_enabled(false, egui::Button::new("More Columns..."));
+        });
+
+        ui.menu_button("Breaks ▾", |ui| {
+            if ui.button("Page").clicked() {
+                insert_page_break(document, canvas, status_message, history);
+                ui.close();
+            }
+            if ui.button("Section").clicked() {
+                insert_section_break(document, canvas, status_message, history);
+                ui.close();
+            }
+        });
+
+        ui.menu_button("Line Numbers ▾", |ui| {
+            ui.add_enabled(false, egui::Button::new("None"));
+            ui.add_enabled(false, egui::Button::new("Continuous"));
+            ui.add_enabled(false, egui::Button::new("Restart Each Page"));
+        });
+    });
+}
+
+fn ribbon_layout_header_footer_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Header & Footer", palette, |ui| {
+        ui.menu_button("Header ▾", |ui| {
+            if ui.button("Edit Header").clicked() {
+                enter_header_footer(document, canvas, HeaderFooterKind::Header, status_message);
+                ui.close();
+            }
+            if ui.button("Blank Header").clicked() {
+                set_blank_header_footer(
+                    document,
+                    canvas,
+                    history,
+                    HeaderFooterKind::Header,
+                    status_message,
+                    ui.input(|i| i.time),
+                );
+                ui.close();
+            }
+        });
+        ui.menu_button("Footer ▾", |ui| {
+            if ui.button("Edit Footer").clicked() {
+                enter_header_footer(document, canvas, HeaderFooterKind::Footer, status_message);
+                ui.close();
+            }
+            if ui.button("Blank Footer").clicked() {
+                set_blank_header_footer(
+                    document,
+                    canvas,
+                    history,
+                    HeaderFooterKind::Footer,
+                    status_message,
+                    ui.input(|i| i.time),
+                );
+                ui.close();
+            }
+        });
+        page_number_menu_button(ui, document, canvas, history, status_message, "Page # ▾");
+    });
+}
+
+fn ribbon_advanced_page_setup_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Advanced", palette, |ui| {
+        ui.menu_button("Page Setup...", |ui| {
+            let section_id = current_section_id(document, canvas);
+            let mut setup = document
+                .section_by_id(section_id)
+                .map(|section| section.page_setup)
+                .unwrap_or_else(PageSetup::standard);
+
+            ui.label(
+                egui::RichText::new("Margins")
+                    .size(11.0)
+                    .color(palette.text_muted),
+            );
+            ui.horizontal(|ui| {
+                page_setup_drag(ui, "Top", &mut setup.margins.top_points);
+                page_setup_drag(ui, "Bottom", &mut setup.margins.bottom_points);
+            });
+            ui.horizontal(|ui| {
+                page_setup_drag(ui, "Left", &mut setup.margins.left_points);
+                page_setup_drag(ui, "Right", &mut setup.margins.right_points);
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                page_setup_drag(ui, "Width", &mut setup.page_size.width_points);
+                page_setup_drag(ui, "Height", &mut setup.page_size.height_points);
+            });
+            ui.separator();
+            let mut page_start = setup.page_number_start.unwrap_or(1) as i32;
+            ui.horizontal(|ui| {
+                ui.label("Page number start");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut page_start)
+                            .range(0..=9999)
+                            .speed(1.0),
+                    )
+                    .changed()
+                {
+                    setup.page_number_start = Some(page_start.max(0) as usize);
+                }
+            });
+            if ui.button("Apply").clicked() {
+                history.checkpoint(document, ui.input(|i| i.time));
+                setup.margins.top_points = setup.margins.top_points.max(0.0);
+                setup.margins.right_points = setup.margins.right_points.max(0.0);
+                setup.margins.bottom_points = setup.margins.bottom_points.max(0.0);
+                setup.margins.left_points = setup.margins.left_points.max(0.0);
+                setup.page_size.width_points = setup.page_size.width_points.max(72.0);
+                setup.page_size.height_points = setup.page_size.height_points.max(72.0);
+                if let Some(section) = document.section_by_id_mut(section_id) {
+                    section.page_setup = setup;
+                }
+                document.sync_compat_from_first_section();
+                *status_message = format!("Page setup updated for Section {section_id}");
+                ui.close();
+            }
+        });
+    });
+}
+
+fn ribbon_header_footer_insert_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Insert", palette, |ui| {
+        page_number_menu_button(ui, document, canvas, history, status_message, "Page # ▾");
+        if ui.button("Date").clicked() {
+            insert_header_footer_text(
+                document,
+                canvas,
+                history,
+                status_message,
+                &today_label(),
+                "Date inserted",
+                ui.input(|i| i.time),
+            );
+        }
+        ui.menu_button("Document Info ▾", |ui| {
+            if ui.button("Title").clicked() {
+                let title = document.title.clone();
+                insert_header_footer_text(
+                    document,
+                    canvas,
+                    history,
+                    status_message,
+                    &title,
+                    "Document title inserted",
+                    ui.input(|i| i.time),
+                );
+                ui.close();
+            }
+        });
+    });
+}
+
+fn ribbon_header_footer_options_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Options", palette, |ui| {
+        let section_id = current_section_id(document, canvas);
+        let active = canvas.active_header_footer.unwrap_or(ActiveHeaderFooter {
+            kind: HeaderFooterKind::Header,
+            section_id,
+            variant: HeaderFooterVariant::Default,
+            page_number: 1,
+        });
+
+        let mut different_first = document
+            .section_by_id(section_id)
+            .map(|section| section.different_first_page)
+            .unwrap_or(false);
+        if ui
+            .checkbox(&mut different_first, "Different First Page")
+            .changed()
+        {
+            history.checkpoint(document, ui.input(|i| i.time));
+            if let Some(section) = document.section_by_id_mut(section_id) {
+                section.different_first_page = different_first;
+            }
+            document.sync_compat_from_first_section();
+            *status_message = format!("Different First Page updated for Section {section_id}");
+        }
+
+        let mut different_even = document.different_odd_even_pages;
+        if ui.checkbox(&mut different_even, "Odd & Even").changed() {
+            history.checkpoint(document, ui.input(|i| i.time));
+            document.different_odd_even_pages = different_even;
+            *status_message = "Odd/even header/footer setting updated".to_owned();
+        }
+
+        let mut linked =
+            document.header_footer_linked(active.section_id, active.kind, active.variant);
+        let link_enabled = document
+            .sections
+            .iter()
+            .position(|section| section.id == active.section_id)
+            .unwrap_or(0)
+            > 0;
+        if ui
+            .add_enabled(
+                link_enabled,
+                egui::Checkbox::new(&mut linked, "Link to Previous"),
+            )
+            .changed()
+        {
+            history.checkpoint(document, ui.input(|i| i.time));
+            document.set_header_footer_link(active.section_id, active.kind, active.variant, linked);
+            *status_message = format!(
+                "{} - Section {} {}",
+                match active.kind {
+                    HeaderFooterKind::Header => "Header",
+                    HeaderFooterKind::Footer => "Footer",
+                },
+                active.section_id,
+                if linked {
+                    "linked to previous"
+                } else {
+                    "unlinked from previous"
+                }
+            );
+        }
+    });
+}
+
+fn ribbon_header_footer_position_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Position", palette, |ui| {
+        let section_id = current_section_id(document, canvas);
+        ui.label("Header:");
+        let mut header_from_top = document
+            .section_by_id(section_id)
+            .map(|section| section.page_setup.header_from_top_points)
+            .unwrap_or(36.0);
+        if ui
+            .add(
+                egui::DragValue::new(&mut header_from_top)
+                    .range(0.0..=288.0)
+                    .speed(1.0),
+            )
+            .changed()
+        {
+            history.checkpoint_coalesced(document, ui.input(|i| i.time));
+            if let Some(section) = document.section_by_id_mut(section_id) {
+                section.page_setup.header_from_top_points = header_from_top.max(0.0);
+            }
+            document.sync_compat_from_first_section();
+            *status_message = "Header position updated".to_owned();
+        }
+
+        ui.label("Footer:");
+        let mut footer_from_bottom = document
+            .section_by_id(section_id)
+            .map(|section| section.page_setup.footer_from_bottom_points)
+            .unwrap_or(36.0);
+        if ui
+            .add(
+                egui::DragValue::new(&mut footer_from_bottom)
+                    .range(0.0..=288.0)
+                    .speed(1.0),
+            )
+            .changed()
+        {
+            history.checkpoint_coalesced(document, ui.input(|i| i.time));
+            if let Some(section) = document.section_by_id_mut(section_id) {
+                section.page_setup.footer_from_bottom_points = footer_from_bottom.max(0.0);
+            }
+            document.sync_compat_from_first_section();
+            *status_message = "Footer position updated".to_owned();
+        }
+    });
+}
+
+fn ribbon_header_footer_actions_group(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Actions", palette, |ui| {
+        let section_id = current_section_id(document, canvas);
+        let active = canvas.active_header_footer.unwrap_or(ActiveHeaderFooter {
+            kind: HeaderFooterKind::Header,
+            section_id,
+            variant: HeaderFooterVariant::Default,
+            page_number: 1,
+        });
+
+        if ui.button("Remove Header").clicked() {
+            history.checkpoint(document, ui.input(|i| i.time));
+            document.clear_header_footer_slot(
+                active.section_id,
+                HeaderFooterKind::Header,
+                active.variant,
+            );
+            document.sync_compat_from_first_section();
+            *status_message = format!("Header - Section {} cleared", active.section_id);
+        }
+        if ui.button("Remove Footer").clicked() {
+            history.checkpoint(document, ui.input(|i| i.time));
+            document.clear_header_footer_slot(
+                active.section_id,
+                HeaderFooterKind::Footer,
+                active.variant,
+            );
+            document.sync_compat_from_first_section();
+            *status_message = format!("Footer - Section {} cleared", active.section_id);
+        }
+        if ui.button("Close").clicked() {
+            canvas.active_header_footer = None;
+            *status_message = "Closed header/footer".to_owned();
+        }
+    });
+}
+
+fn page_number_menu_button(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+    status_message: &mut String,
+    label: &str,
+) {
+    ui.menu_button(label, |ui| {
+        if ui.button("Bottom of Page").clicked() {
+            insert_page_number(
+                document,
+                canvas,
+                history,
+                status_message,
+                HeaderFooterKind::Footer,
+                ui.input(|i| i.time),
+            );
+            ui.close();
+        }
+        if ui.button("Top of Page").clicked() {
+            insert_page_number(
+                document,
+                canvas,
+                history,
+                status_message,
+                HeaderFooterKind::Header,
+                ui.input(|i| i.time),
+            );
+            ui.close();
+        }
+        if ui.button("Current Position").clicked() {
+            let kind = canvas
+                .active_header_footer
+                .map(|active| active.kind)
+                .unwrap_or(HeaderFooterKind::Footer);
+            insert_page_number(
+                document,
+                canvas,
+                history,
+                status_message,
+                kind,
+                ui.input(|i| i.time),
+            );
+            ui.close();
+        }
+    });
+}
+
+fn insert_page_number(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+    status_message: &mut String,
+    fallback_kind: HeaderFooterKind,
+    now: f64,
+) {
+    history.checkpoint(document, now);
+    let (section_id, variant, kind) = canvas
+        .active_header_footer
+        .map(|active| (active.section_id, active.variant, active.kind))
+        .unwrap_or_else(|| {
+            (
+                current_section_id(document, canvas),
+                HeaderFooterVariant::Default,
+                fallback_kind,
+            )
+        });
+    let story = document
+        .header_footer_story_mut_materialized(section_id, kind, variant)
+        .expect("current section exists");
+    let text = story.plain_text();
+    if text.trim().is_empty() {
+        story.runs = vec![TextRun {
+            text: "Page { PAGE } of { NUMPAGES }".to_owned(),
+            style: canvas.active_style,
+        }];
+    } else {
+        story.runs.push(TextRun {
+            text: " { PAGE }".to_owned(),
+            style: canvas.active_style,
+        });
+    }
+    document.sync_compat_from_first_section();
+    enter_header_footer_at_end(document, canvas, kind, section_id, variant);
+    *status_message = "Page number inserted".to_owned();
+}
+
+fn enter_header_footer(
+    document: &DocumentState,
+    canvas: &mut CanvasState,
+    kind: HeaderFooterKind,
+    status_message: &mut String,
+) {
+    let section_id = current_section_id(document, canvas);
+    enter_header_footer_at_end(
+        document,
+        canvas,
+        kind,
+        section_id,
+        HeaderFooterVariant::Default,
+    );
+    *status_message = match kind {
+        HeaderFooterKind::Header => "Editing header",
+        HeaderFooterKind::Footer => "Editing footer",
+    }
+    .to_owned();
+}
+
+fn enter_header_footer_at_end(
+    document: &DocumentState,
+    canvas: &mut CanvasState,
+    kind: HeaderFooterKind,
+    section_id: crate::document::SectionId,
+    variant: HeaderFooterVariant,
+) {
+    canvas.active_header_footer = Some(ActiveHeaderFooter {
+        kind,
+        section_id,
+        variant,
+        page_number: 1,
+    });
+    canvas.active_header_footer_cursor = document
+        .resolve_header_footer_slot(section_id, kind, variant)
+        .story
+        .plain_text()
+        .chars()
+        .count();
+    canvas.active_header_footer_selection = egui::text_selection::CCursorRange::one(
+        egui::epaint::text::cursor::CCursor::new(canvas.active_header_footer_cursor),
+    );
+}
+
+fn set_blank_header_footer(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+    kind: HeaderFooterKind,
+    status_message: &mut String,
+    now: f64,
+) {
+    history.checkpoint(document, now);
+    let section_id = current_section_id(document, canvas);
+    let variant = HeaderFooterVariant::Default;
+    let story = document
+        .header_footer_story_mut_materialized(section_id, kind, variant)
+        .expect("current section exists");
+    story.runs = vec![TextRun {
+        text: String::new(),
+        style: canvas.active_style,
+    }];
+    document.sync_compat_from_first_section();
+    enter_header_footer_at_end(document, canvas, kind, section_id, variant);
+    *status_message = match kind {
+        HeaderFooterKind::Header => "Blank header inserted",
+        HeaderFooterKind::Footer => "Blank footer inserted",
+    }
+    .to_owned();
+}
+
+fn insert_header_footer_text(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+    status_message: &mut String,
+    text: &str,
+    message: &str,
+    now: f64,
+) {
+    let Some(active) = canvas.active_header_footer else {
+        return;
+    };
+    history.checkpoint(document, now);
+    let story = document
+        .header_footer_story_mut_materialized(active.section_id, active.kind, active.variant)
+        .expect("active section exists");
+    let mut plain = story.plain_text();
+    let cursor = canvas
+        .active_header_footer_cursor
+        .min(plain.chars().count());
+    let byte_index = plain
+        .char_indices()
+        .nth(cursor)
+        .map(|(index, _)| index)
+        .unwrap_or(plain.len());
+    plain.insert_str(byte_index, text);
+    story.runs = vec![TextRun {
+        text: plain,
+        style: canvas.active_style,
+    }];
+    document.sync_compat_from_first_section();
+    canvas.active_header_footer_cursor = cursor + text.chars().count();
+    canvas.active_header_footer_selection = egui::text_selection::CCursorRange::one(
+        egui::epaint::text::cursor::CCursor::new(canvas.active_header_footer_cursor),
+    );
+    *status_message = message.to_owned();
+}
+
+fn page_size_presets() -> [(&'static str, PageSize); 3] {
+    [
+        (
+            "A4",
+            PageSize {
+                width_points: 595.0,
+                height_points: 842.0,
+            },
+        ),
+        (
+            "Letter",
+            PageSize {
+                width_points: 612.0,
+                height_points: 792.0,
+            },
+        ),
+        (
+            "Legal",
+            PageSize {
+                width_points: 612.0,
+                height_points: 1008.0,
+            },
+        ),
+    ]
+}
+
+fn set_current_section_margins(
+    document: &mut DocumentState,
+    canvas: &CanvasState,
+    history: &mut ChangeHistory,
+    status_message: &mut String,
+    margins: PageMargins,
+    label: &str,
+    now: f64,
+) {
+    history.checkpoint(document, now);
+    let section_id = current_section_id(document, canvas);
+    if let Some(section) = document.section_by_id_mut(section_id) {
+        section.page_setup.margins = margins;
+    }
+    document.sync_compat_from_first_section();
+    *status_message = format!("{label} applied to Section {section_id}");
+}
+
+fn set_current_section_page_size(
+    document: &mut DocumentState,
+    canvas: &CanvasState,
+    history: &mut ChangeHistory,
+    status_message: &mut String,
+    page_size: PageSize,
+    label: &str,
+    now: f64,
+) {
+    history.checkpoint(document, now);
+    let section_id = current_section_id(document, canvas);
+    if let Some(section) = document.section_by_id_mut(section_id) {
+        section.page_setup.page_size = page_size;
+    }
+    document.sync_compat_from_first_section();
+    *status_message = format!("Page size set to {label} for Section {section_id}");
+}
+
+fn set_current_section_orientation(
+    document: &mut DocumentState,
+    canvas: &CanvasState,
+    history: &mut ChangeHistory,
+    status_message: &mut String,
+    portrait: bool,
+    now: f64,
+) {
+    history.checkpoint(document, now);
+    let section_id = current_section_id(document, canvas);
+    if let Some(section) = document.section_by_id_mut(section_id) {
+        let width = section.page_setup.page_size.width_points;
+        let height = section.page_setup.page_size.height_points;
+        section.page_setup.page_size = if portrait {
+            PageSize {
+                width_points: width.min(height),
+                height_points: width.max(height),
+            }
+        } else {
+            PageSize {
+                width_points: width.max(height),
+                height_points: width.min(height),
+            }
+        };
+    }
+    document.sync_compat_from_first_section();
+    *status_message = format!(
+        "{} orientation applied to Section {section_id}",
+        if portrait { "Portrait" } else { "Landscape" }
+    );
+}
+
+fn page_setup_drag(ui: &mut egui::Ui, label: &str, value: &mut f32) {
+    ui.label(label);
+    ui.add(
+        egui::DragValue::new(value)
+            .range(0.0..=2000.0)
+            .speed(1.0)
+            .fixed_decimals(0),
+    );
+}
+
+fn today_label() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let date = js_sys::Date::new_0();
+        return format!(
+            "{:04}-{:02}-{:02}",
+            date.get_full_year(),
+            date.get_month() + 1,
+            date.get_date()
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let days = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| (duration.as_secs() / 86_400) as i64)
+            .unwrap_or(0);
+        let (year, month, day) = civil_from_days(days);
+        format!("{year:04}-{month:02}-{day:02}")
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_unix_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u32, day as u32)
 }
 
 fn ribbon_paragraph_group(
@@ -984,6 +1857,10 @@ fn ribbon_view_group(
             canvas.zoom = 1.0;
             canvas.pan = egui::Vec2::ZERO;
             *status_message = "View reset".to_owned();
+        }
+        if ui.button("Page Width").clicked() {
+            canvas.zoom_mode = ZoomMode::FitPage;
+            *status_message = "Page width view".to_owned();
         }
         ui.separator();
         if theme_switch(ui, theme_mode, palette, false) {
@@ -1465,20 +2342,21 @@ fn ribbon_group(
     palette: ThemePalette,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
-    const RIBBON_GROUP_CONTENT_HEIGHT: f32 = 64.0;
+    const RIBBON_GROUP_CONTENT_HEIGHT: f32 = 44.0;
 
     egui::Frame::new()
-        .fill(palette.ribbon_group_bg)
-        .inner_margin(egui::Margin::symmetric(8, 6))
-        .stroke(egui::Stroke::new(1.0, palette.border))
-        .corner_radius(4.0)
+        .fill(egui::Color32::TRANSPARENT)
+        .inner_margin(egui::Margin::symmetric(6, 3))
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(0.0)
         .show(ui, |ui| {
             ui.set_min_height(RIBBON_GROUP_CONTENT_HEIGHT);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(5.0, 3.0);
                     add_contents(ui);
                 });
-                ui.add_space(4.0);
+                ui.add_space(2.0);
                 ui.label(
                     egui::RichText::new(title)
                         .size(10.0)
@@ -1486,6 +2364,7 @@ fn ribbon_group(
                 );
             });
         });
+    ui.separator();
 }
 
 fn format_button(
@@ -1576,4 +2455,85 @@ fn alignment_button(
     }
 
     response
+}
+
+#[cfg(test)]
+fn layout_tab_command_labels() -> &'static [&'static str] {
+    &[
+        "Margins",
+        "Size",
+        "Orientation",
+        "Columns",
+        "Breaks",
+        "Line Numbers",
+        "Header",
+        "Footer",
+        "Page #",
+        "Page Setup",
+    ]
+}
+
+#[cfg(test)]
+fn layout_tab_removed_labels() -> &'static [&'static str] {
+    &[
+        "Zoom",
+        "Dark",
+        "Header from Top",
+        "Footer from Bottom",
+        "Remove Header",
+        "Remove Footer",
+        "Close Header and Footer",
+    ]
+}
+
+#[cfg(test)]
+fn header_footer_contextual_tab_visible(canvas: &CanvasState) -> bool {
+    canvas.active_header_footer.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_tab_contract_lists_only_page_layout_commands() {
+        assert_eq!(
+            layout_tab_command_labels(),
+            &[
+                "Margins",
+                "Size",
+                "Orientation",
+                "Columns",
+                "Breaks",
+                "Line Numbers",
+                "Header",
+                "Footer",
+                "Page #",
+                "Page Setup",
+            ]
+        );
+        assert!(!layout_tab_command_labels()
+            .iter()
+            .any(|label| layout_tab_removed_labels().contains(label)));
+    }
+
+    #[test]
+    fn header_footer_tab_visibility_tracks_editing_state() {
+        let mut canvas = CanvasState::default();
+        assert!(!header_footer_contextual_tab_visible(&canvas));
+
+        canvas.active_header_footer = Some(ActiveHeaderFooter {
+            kind: HeaderFooterKind::Header,
+            section_id: 1,
+            variant: HeaderFooterVariant::Default,
+            page_number: 1,
+        });
+        assert!(header_footer_contextual_tab_visible(&canvas));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn unix_epoch_formats_as_civil_date() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+    }
 }

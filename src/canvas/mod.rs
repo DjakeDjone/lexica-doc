@@ -17,17 +17,17 @@ use eframe::egui::{
 
 use crate::{
     app::{
-        ActiveHeaderFooter, CanvasState, ChangeHistory, HeaderFooterKind, ResizeHandle,
-        TableResizeDrag, TableResizeHandleRect, TableResizeKind, ThemeMode,
+        ActiveHeaderFooter, CanvasState, ChangeHistory, ResizeHandle, TableResizeDrag,
+        TableResizeHandleRect, TableResizeKind, ThemeMode,
     },
     document::{
-        text_format, CharacterStyle, DocumentImage, DocumentState, DocumentTable, LineSpacingKind,
-        ParagraphAlignment, TextRun, WrapMode, OBJECT_REPLACEMENT_CHAR,
+        text_format, CharacterStyle, DocumentImage, DocumentState, DocumentTable, HeaderFooterKind,
+        LineSpacingKind, ParagraphAlignment, TextRun, WrapMode, OBJECT_REPLACEMENT_CHAR,
     },
     grammar::GrammarError,
     layout::{
         centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
-        fit_page_zoom, page_content_rect,
+        fit_page_zoom, section_page_content_rect,
     },
     ui::squiggles::{paint_grammar_squiggles, ReplacementAction, SquigglePageSlice},
 };
@@ -47,6 +47,7 @@ struct DocumentLayout {
     images: Vec<ImageLayout>,
     tables: Vec<TableLayout>,
     manual_page_break_rows: Vec<usize>,
+    paragraph_start_rows: Vec<usize>,
 }
 
 #[allow(dead_code)]
@@ -108,14 +109,20 @@ pub fn paint_document_canvas(
     let pixels_per_point = ui.ctx().pixels_per_point();
     apply_viewport_input(ui, &response, canvas);
     if canvas.zoom_mode == crate::app::ZoomMode::FitPage {
-        canvas.zoom = fit_page_zoom(viewport, document.page_size);
+        canvas.zoom = fit_page_zoom(viewport, document.default_page_setup().page_size);
     }
 
     painter.rect_filled(viewport, CornerRadius::ZERO, palette.canvas_bg);
 
-    let base_page_rect =
-        centered_page_rect(viewport, document.page_size, canvas.zoom, egui::Vec2::ZERO);
-    let content_size = page_content_rect(base_page_rect, document.margins, canvas.zoom).size();
+    let default_setup = document.default_page_setup();
+    let base_page_rect = centered_page_rect(
+        viewport,
+        default_setup.page_size,
+        canvas.zoom,
+        egui::Vec2::ZERO,
+    );
+    let content_size =
+        section_page_content_rect(base_page_rect, default_setup, 14.0, 14.0, canvas.zoom).size();
     let mut document_layout = layout_document(ui, document, canvas, content_size.x);
     let page_layout = layout_page_stack(
         viewport,
@@ -123,6 +130,7 @@ pub fn paint_document_canvas(
         canvas,
         &document_layout.galley,
         &document_layout.manual_page_break_rows,
+        &document_layout.paragraph_start_rows,
     );
 
     if canvas.active_header_footer.is_some()
@@ -218,6 +226,9 @@ pub fn paint_document_canvas(
             document,
             canvas,
             page.page_rect,
+            page.section_id,
+            page.page_index_within_section,
+            page.section_page_count,
             page_index + 1,
             page_layout.pages.len(),
             canvas.active_header_footer,
@@ -562,34 +573,50 @@ fn paint_page_header_footer(
     document: &DocumentState,
     canvas: &CanvasState,
     page_rect: Rect,
+    section_id: crate::document::SectionId,
+    page_index_within_section: usize,
+    section_page_count: usize,
     page_number: usize,
     page_count: usize,
     active_header_footer: Option<ActiveHeaderFooter>,
     color: Color32,
 ) {
+    let setup = document
+        .section_by_id(section_id)
+        .map(|section| section.page_setup)
+        .unwrap_or_else(|| document.default_page_setup());
     let horizontal_margin =
-        document_points_to_screen_points(document.margins.left_points.max(18.0), canvas.zoom);
+        document_points_to_screen_points(setup.margins.left_points.max(18.0), canvas.zoom);
     let text_width = (page_rect.width() - horizontal_margin * 2.0).max(1.0);
 
+    let header_variant = document.header_footer_variant_for_page(
+        section_id,
+        page_index_within_section,
+        HeaderFooterKind::Header,
+    );
+    let header_story =
+        document.resolve_header_footer_slot(section_id, HeaderFooterKind::Header, header_variant);
     let header_runs = rendered_header_footer_runs(
         document,
-        document.header_runs_for_page(page_number),
+        &header_story.story.runs,
+        section_id,
+        page_index_within_section,
         page_number,
         page_count,
+        section_page_count,
     );
     if !runs_plain_text(&header_runs).trim().is_empty()
         && active_header_footer
             != Some(ActiveHeaderFooter {
                 kind: HeaderFooterKind::Header,
+                section_id,
+                variant: header_variant,
                 page_number,
             })
     {
         let font_size = header_footer_base_font_size(&header_runs, canvas.zoom);
-        let header_margin =
-            document_points_to_screen_points(document.margins.top_points, canvas.zoom);
         let y = page_rect.top()
-            + (header_margin - font_size).max(document_points_to_screen_points(4.0, canvas.zoom))
-                * 0.5;
+            + document_points_to_screen_points(setup.header_from_top_points, canvas.zoom);
         paint_tab_aligned_margin_runs(
             painter,
             &header_runs,
@@ -603,23 +630,35 @@ fn paint_page_header_footer(
         );
     }
 
+    let footer_variant = document.header_footer_variant_for_page(
+        section_id,
+        page_index_within_section,
+        HeaderFooterKind::Footer,
+    );
+    let footer_story =
+        document.resolve_header_footer_slot(section_id, HeaderFooterKind::Footer, footer_variant);
     let footer_runs = rendered_header_footer_runs(
         document,
-        document.footer_runs_for_page(page_number),
+        &footer_story.story.runs,
+        section_id,
+        page_index_within_section,
         page_number,
         page_count,
+        section_page_count,
     );
     if !runs_plain_text(&footer_runs).trim().is_empty()
         && active_header_footer
             != Some(ActiveHeaderFooter {
                 kind: HeaderFooterKind::Footer,
+                section_id,
+                variant: footer_variant,
                 page_number,
             })
     {
         let font_size = header_footer_base_font_size(&footer_runs, canvas.zoom);
-        let bottom_margin =
-            document_points_to_screen_points(document.margins.bottom_points, canvas.zoom);
-        let y = page_rect.bottom() - bottom_margin * 0.5 - font_size * 0.5;
+        let y = page_rect.bottom()
+            - document_points_to_screen_points(setup.footer_from_bottom_points, canvas.zoom)
+            - font_size;
         paint_tab_aligned_margin_runs(
             painter,
             &footer_runs,
@@ -637,12 +676,22 @@ fn paint_page_header_footer(
 fn rendered_header_footer_runs(
     document: &DocumentState,
     runs: &[TextRun],
+    section_id: crate::document::SectionId,
+    page_index_within_section: usize,
     page_number: usize,
     page_count: usize,
+    section_page_count: usize,
 ) -> Vec<TextRun> {
     runs.iter()
         .map(|run| TextRun {
-            text: document.render_page_field(&run.text, page_number, page_count),
+            text: document.render_page_field_for_section_page(
+                &run.text,
+                section_id,
+                page_index_within_section,
+                page_number.saturating_sub(1),
+                page_count,
+                section_page_count,
+            ),
             style: run.style,
         })
         .collect()
@@ -854,14 +903,32 @@ fn header_footer_hit(
         .enumerate()
         .find_map(|(index, page)| {
             let page_number = index + 1;
-            if page_header_rect(page.page_rect, document, canvas).contains(pointer_pos) {
+            let header_variant = document.header_footer_variant_for_page(
+                page.section_id,
+                page.page_index_within_section,
+                HeaderFooterKind::Header,
+            );
+            let footer_variant = document.header_footer_variant_for_page(
+                page.section_id,
+                page.page_index_within_section,
+                HeaderFooterKind::Footer,
+            );
+            if page_header_rect(page.page_rect, document, canvas, page.section_id)
+                .contains(pointer_pos)
+            {
                 Some(ActiveHeaderFooter {
                     kind: HeaderFooterKind::Header,
+                    section_id: page.section_id,
+                    variant: header_variant,
                     page_number,
                 })
-            } else if page_footer_rect(page.page_rect, document, canvas).contains(pointer_pos) {
+            } else if page_footer_rect(page.page_rect, document, canvas, page.section_id)
+                .contains(pointer_pos)
+            {
                 Some(ActiveHeaderFooter {
                     kind: HeaderFooterKind::Footer,
+                    section_id: page.section_id,
+                    variant: footer_variant,
                     page_number,
                 })
             } else {
@@ -888,11 +955,21 @@ fn paint_active_header_footer_editor(
     };
 
     let margin_rect = match active.kind {
-        HeaderFooterKind::Header => page_header_rect(page.page_rect, document, canvas),
-        HeaderFooterKind::Footer => page_footer_rect(page.page_rect, document, canvas),
+        HeaderFooterKind::Header => {
+            page_header_rect(page.page_rect, document, canvas, active.section_id)
+        }
+        HeaderFooterKind::Footer => {
+            page_footer_rect(page.page_rect, document, canvas, active.section_id)
+        }
     };
-    let horizontal_margin =
-        document_points_to_screen_points(document.margins.left_points.max(18.0), canvas.zoom);
+    let horizontal_margin = document_points_to_screen_points(
+        document
+            .section_by_id(active.section_id)
+            .map(|section| section.page_setup.margins.left_points)
+            .unwrap_or_else(|| document.default_page_setup().margins.left_points)
+            .max(18.0),
+        canvas.zoom,
+    );
     let editor_height = document_points_to_screen_points(20.0, canvas.zoom).clamp(18.0, 28.0);
     let editor_rect = Rect::from_center_size(
         margin_rect.center(),
@@ -985,10 +1062,18 @@ fn paint_active_header_footer_editor(
             HeaderFooterKind::Header => "Header",
             HeaderFooterKind::Footer => "Footer",
         };
+        let inherited = document
+            .resolve_header_footer_slot(active.section_id, active.kind, active.variant)
+            .inherited;
+        let section_label = format!(
+            "{hint} - Section {}{}",
+            active.section_id,
+            if inherited { " (Same as Previous)" } else { "" }
+        );
         ui.painter().text(
             editor_rect.left_top(),
             Align2::LEFT_TOP,
-            hint,
+            section_label,
             FontId::new(editor_height * 0.72, FontFamily::Proportional),
             Color32::from_rgba_premultiplied(96, 104, 118, 140),
         );
@@ -1026,8 +1111,7 @@ fn paint_active_header_footer_editor(
     if changed && edited_runs != before_runs {
         normalize_header_footer_runs(&mut edited_runs);
         *active_header_footer_runs_mut(document, active) = edited_runs;
-        *active_header_footer_text_mut(document, active) =
-            runs_plain_text(active_header_footer_runs(document, active));
+        document.sync_compat_from_first_section();
         canvas.active_style = header_footer_style_at(
             active_header_footer_runs(document, active),
             canvas.active_header_footer_selection.primary.index,
@@ -1561,58 +1645,49 @@ fn measure_segment_prefix_width(
 }
 
 fn active_header_footer_runs(document: &DocumentState, active: ActiveHeaderFooter) -> &[TextRun] {
-    let first_page = document.different_first_page && active.page_number == 1;
-    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
-    match (active.kind, first_page, even_page) {
-        (HeaderFooterKind::Header, true, _) => &document.first_page_header_runs,
-        (HeaderFooterKind::Footer, true, _) => &document.first_page_footer_runs,
-        (HeaderFooterKind::Header, _, true) => &document.even_page_header_runs,
-        (HeaderFooterKind::Footer, _, true) => &document.even_page_footer_runs,
-        (HeaderFooterKind::Header, _, _) => &document.header_runs,
-        (HeaderFooterKind::Footer, _, _) => &document.footer_runs,
-    }
-}
-
-fn active_header_footer_text_mut(
-    document: &mut DocumentState,
-    active: ActiveHeaderFooter,
-) -> &mut String {
-    let first_page = document.different_first_page && active.page_number == 1;
-    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
-    match (active.kind, first_page, even_page) {
-        (HeaderFooterKind::Header, true, _) => &mut document.first_page_header_text,
-        (HeaderFooterKind::Footer, true, _) => &mut document.first_page_footer_text,
-        (HeaderFooterKind::Header, _, true) => &mut document.even_page_header_text,
-        (HeaderFooterKind::Footer, _, true) => &mut document.even_page_footer_text,
-        (HeaderFooterKind::Header, _, _) => &mut document.header_text,
-        (HeaderFooterKind::Footer, _, _) => &mut document.footer_text,
-    }
+    document
+        .resolve_header_footer_slot(active.section_id, active.kind, active.variant)
+        .story
+        .runs
+        .as_slice()
 }
 
 fn active_header_footer_runs_mut(
     document: &mut DocumentState,
     active: ActiveHeaderFooter,
 ) -> &mut Vec<TextRun> {
-    let first_page = document.different_first_page && active.page_number == 1;
-    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
-    match (active.kind, first_page, even_page) {
-        (HeaderFooterKind::Header, true, _) => &mut document.first_page_header_runs,
-        (HeaderFooterKind::Footer, true, _) => &mut document.first_page_footer_runs,
-        (HeaderFooterKind::Header, _, true) => &mut document.even_page_header_runs,
-        (HeaderFooterKind::Footer, _, true) => &mut document.even_page_footer_runs,
-        (HeaderFooterKind::Header, _, _) => &mut document.header_runs,
-        (HeaderFooterKind::Footer, _, _) => &mut document.footer_runs,
-    }
+    &mut document
+        .header_footer_story_mut_materialized(active.section_id, active.kind, active.variant)
+        .expect("active header/footer section should exist")
+        .runs
 }
 
-fn page_header_rect(page_rect: Rect, document: &DocumentState, canvas: &CanvasState) -> Rect {
-    let height = document_points_to_screen_points(document.margins.top_points, canvas.zoom)
+fn page_header_rect(
+    page_rect: Rect,
+    document: &DocumentState,
+    canvas: &CanvasState,
+    section_id: crate::document::SectionId,
+) -> Rect {
+    let setup = document
+        .section_by_id(section_id)
+        .map(|section| section.page_setup)
+        .unwrap_or_else(|| document.default_page_setup());
+    let height = document_points_to_screen_points(setup.margins.top_points, canvas.zoom)
         .clamp(18.0, page_rect.height() * 0.25);
     Rect::from_min_size(page_rect.min, egui::vec2(page_rect.width(), height))
 }
 
-fn page_footer_rect(page_rect: Rect, document: &DocumentState, canvas: &CanvasState) -> Rect {
-    let height = document_points_to_screen_points(document.margins.bottom_points, canvas.zoom)
+fn page_footer_rect(
+    page_rect: Rect,
+    document: &DocumentState,
+    canvas: &CanvasState,
+    section_id: crate::document::SectionId,
+) -> Rect {
+    let setup = document
+        .section_by_id(section_id)
+        .map(|section| section.page_setup)
+        .unwrap_or_else(|| document.default_page_setup());
+    let height = document_points_to_screen_points(setup.margins.bottom_points, canvas.zoom)
         .clamp(18.0, page_rect.height() * 0.25);
     Rect::from_min_max(
         egui::pos2(page_rect.left(), page_rect.bottom() - height),
@@ -1946,11 +2021,13 @@ fn layout_document(
     let mut images = Vec::new();
     let mut tables = Vec::new();
     let mut manual_page_break_rows = Vec::new();
+    let mut paragraph_start_rows = Vec::new();
     let mut paragraph_spacing_ranges = Vec::new();
     let mut row_index = 0usize;
     let mut side_wrap_flow: Option<ActiveSideWrapFlow> = None;
 
     for paragraph in document.paragraphs() {
+        paragraph_start_rows.push(row_index);
         if side_wrap_flow
             .as_ref()
             .is_some_and(|flow| flow.remaining_height <= 0.0)
@@ -2165,6 +2242,7 @@ fn layout_document(
         images,
         tables,
         manual_page_break_rows,
+        paragraph_start_rows,
     }
 }
 
@@ -2615,6 +2693,9 @@ mod tests {
             different_first_page: false,
             different_odd_even_pages: false,
             page_number_start: 1,
+            sections: vec![crate::document::Section::first(
+                crate::document::PageSetup::standard(),
+            )],
         }
     }
 

@@ -11,9 +11,9 @@ use super::{
     docx::docx_to_document,
     markdown::markdown_to_runs,
     odt::{document_to_odt, odt_to_document},
-    CharacterStyle, DocumentImage, DocumentState, DocumentTable, FontChoice, ImageLayoutMode,
-    LineSpacing, LineSpacingKind, ListKind, ParagraphAlignment, TableCell, TextRun,
-    OBJECT_REPLACEMENT_CHAR,
+    CharacterStyle, DocumentImage, DocumentState, DocumentTable, FontChoice, HeaderFooterKind,
+    ImageLayoutMode, LineSpacing, LineSpacingKind, ListKind, ParagraphAlignment, TableCell,
+    TextRun, OBJECT_REPLACEMENT_CHAR,
 };
 
 impl DocumentState {
@@ -45,9 +45,20 @@ impl DocumentState {
                 document.paragraph_tables = imported.paragraph_tables;
                 if let Some(page_size) = imported.page_size {
                     document.page_size = page_size;
+                    if let Some(section) = document.sections.first_mut() {
+                        section.page_setup.page_size = page_size;
+                    }
                 }
                 if let Some(margins) = imported.margins {
                     document.margins = margins;
+                    if let Some(section) = document.sections.first_mut() {
+                        section.page_setup.margins = margins;
+                    }
+                }
+                document.different_odd_even_pages = imported.different_odd_even_pages;
+                if !imported.sections.is_empty() {
+                    document.sections = imported.sections;
+                    document.sync_compat_from_first_section();
                 }
                 document.normalize_runs();
                 document.ensure_paragraph_style_count();
@@ -67,10 +78,17 @@ impl DocumentState {
                 document.paragraph_tables = imported.paragraph_tables;
                 if let Some(page_size) = imported.page_size {
                     document.page_size = page_size;
+                    if let Some(section) = document.sections.first_mut() {
+                        section.page_setup.page_size = page_size;
+                    }
                 }
                 if let Some(margins) = imported.margins {
                     document.margins = margins;
+                    if let Some(section) = document.sections.first_mut() {
+                        section.page_setup.margins = margins;
+                    }
                 }
+                document.sync_compat_from_first_section();
                 document.normalize_runs();
                 document.ensure_paragraph_style_count();
                 return Ok(document);
@@ -534,21 +552,52 @@ p {{ margin: 0; white-space: pre-wrap; }}\
     }
 
     fn stamp_pdf_pages_header_footer(&self, pages: &mut [PdfPage]) {
-        if self.header_text.trim().is_empty() && self.footer_text.trim().is_empty() {
+        let Some(section) = self.sections.first() else {
             return;
-        }
+        };
 
         let page_count = pages.len();
         for (index, page) in pages.iter_mut().enumerate() {
-            let page_number = index + 1;
-            let header = self.render_page_field(
-                self.header_template_for_page(page_number),
-                page_number,
+            let section_page_index = index;
+            let header_variant = self.header_footer_variant_for_page(
+                section.id,
+                section_page_index,
+                HeaderFooterKind::Header,
+            );
+            let footer_variant = self.header_footer_variant_for_page(
+                section.id,
+                section_page_index,
+                HeaderFooterKind::Footer,
+            );
+            let header_story = self.resolve_header_footer_slot(
+                section.id,
+                HeaderFooterKind::Header,
+                header_variant,
+            );
+            let footer_story = self.resolve_header_footer_slot(
+                section.id,
+                HeaderFooterKind::Footer,
+                footer_variant,
+            );
+            let header_template = header_story.story.plain_text();
+            let footer_template = footer_story.story.plain_text();
+            if header_template.trim().is_empty() && footer_template.trim().is_empty() {
+                continue;
+            }
+            let header = self.render_page_field_for_section_page(
+                &header_template,
+                section.id,
+                section_page_index,
+                index,
+                page_count,
                 page_count,
             );
-            let footer = self.render_page_field(
-                self.footer_template_for_page(page_number),
-                page_number,
+            let footer = self.render_page_field_for_section_page(
+                &footer_template,
+                section.id,
+                section_page_index,
+                index,
+                page_count,
                 page_count,
             );
             append_pdf_page_field_ops(

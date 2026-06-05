@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use eframe::egui;
 
-use crate::document::{CharacterStyle, ParagraphStyle};
+use crate::document::{
+    CharacterStyle, HeaderFooterKind, HeaderFooterVariant, ParagraphStyle, SectionId,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResizeHandle {
@@ -62,15 +64,11 @@ pub enum ZoomMode {
     FitPage,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum HeaderFooterKind {
-    Header,
-    Footer,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActiveHeaderFooter {
     pub kind: HeaderFooterKind,
+    pub section_id: SectionId,
+    pub variant: HeaderFooterVariant,
     pub page_number: usize,
 }
 

@@ -19,7 +19,7 @@ use crate::document::{
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::ZoomMode;
-use super::{ActiveHeaderFooter, CanvasState, ChangeHistory, HeaderFooterKind};
+use super::{ActiveHeaderFooter, CanvasState, ChangeHistory};
 
 pub(super) fn open_document(
     document: &mut DocumentState,
@@ -378,6 +378,37 @@ pub(super) fn insert_page_break(
     canvas.active_style = document.typing_style_at(cursor_index);
     canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
     *status_message = "Inserted page break".to_owned();
+}
+
+pub(super) fn insert_section_break(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+) {
+    history.checkpoint(document, f64::NAN);
+    let selected = canvas.selection.as_sorted_char_range();
+    let insert_at = selected.start;
+    if selected.start < selected.end {
+        document.delete_range(selected);
+    }
+
+    let cursor_index = document.insert_page_break(insert_at);
+    let paragraph_index = document
+        .paragraphs()
+        .iter()
+        .position(|paragraph| {
+            paragraph.range.contains(&cursor_index) || paragraph.range.start == cursor_index
+        })
+        .unwrap_or_else(|| document.paragraph_count().saturating_sub(1));
+    let section_id = document.insert_section_break_before_paragraph(paragraph_index);
+    canvas.selection = egui::text_selection::CCursorRange::one(
+        egui::epaint::text::cursor::CCursor::new(cursor_index),
+    );
+    canvas.active_header_footer = None;
+    canvas.active_style = document.typing_style_at(cursor_index);
+    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+    *status_message = format!("Inserted section break before Section {section_id}");
 }
 
 pub(super) fn insert_image(
@@ -762,7 +793,7 @@ fn apply_selection_or_active_style(
                 range,
                 mutate,
             );
-            sync_header_footer_plain_text(document, active);
+            document.sync_compat_from_first_section();
         }
         mutate(&mut canvas.active_style);
         return;
@@ -790,47 +821,21 @@ fn apply_selection_or_active_style(
 }
 
 fn active_header_footer_runs(document: &DocumentState, active: ActiveHeaderFooter) -> &[TextRun] {
-    let first_page = document.different_first_page && active.page_number == 1;
-    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
-    match (active.kind, first_page, even_page) {
-        (HeaderFooterKind::Header, true, _) => &document.first_page_header_runs,
-        (HeaderFooterKind::Footer, true, _) => &document.first_page_footer_runs,
-        (HeaderFooterKind::Header, _, true) => &document.even_page_header_runs,
-        (HeaderFooterKind::Footer, _, true) => &document.even_page_footer_runs,
-        (HeaderFooterKind::Header, _, _) => &document.header_runs,
-        (HeaderFooterKind::Footer, _, _) => &document.footer_runs,
-    }
+    document
+        .resolve_header_footer_slot(active.section_id, active.kind, active.variant)
+        .story
+        .runs
+        .as_slice()
 }
 
 fn active_header_footer_runs_mut(
     document: &mut DocumentState,
     active: ActiveHeaderFooter,
 ) -> &mut Vec<TextRun> {
-    let first_page = document.different_first_page && active.page_number == 1;
-    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
-    match (active.kind, first_page, even_page) {
-        (HeaderFooterKind::Header, true, _) => &mut document.first_page_header_runs,
-        (HeaderFooterKind::Footer, true, _) => &mut document.first_page_footer_runs,
-        (HeaderFooterKind::Header, _, true) => &mut document.even_page_header_runs,
-        (HeaderFooterKind::Footer, _, true) => &mut document.even_page_footer_runs,
-        (HeaderFooterKind::Header, _, _) => &mut document.header_runs,
-        (HeaderFooterKind::Footer, _, _) => &mut document.footer_runs,
-    }
-}
-
-fn sync_header_footer_plain_text(document: &mut DocumentState, active: ActiveHeaderFooter) {
-    let plain_text = runs_plain_text(active_header_footer_runs(document, active));
-    let first_page = document.different_first_page && active.page_number == 1;
-    let even_page = document.different_odd_even_pages && active.page_number % 2 == 0;
-    let target = match (active.kind, first_page, even_page) {
-        (HeaderFooterKind::Header, true, _) => &mut document.first_page_header_text,
-        (HeaderFooterKind::Footer, true, _) => &mut document.first_page_footer_text,
-        (HeaderFooterKind::Header, _, true) => &mut document.even_page_header_text,
-        (HeaderFooterKind::Footer, _, true) => &mut document.even_page_footer_text,
-        (HeaderFooterKind::Header, _, _) => &mut document.header_text,
-        (HeaderFooterKind::Footer, _, _) => &mut document.footer_text,
-    };
-    *target = plain_text;
+    &mut document
+        .header_footer_story_mut_materialized(active.section_id, active.kind, active.variant)
+        .expect("active header/footer section should exist")
+        .runs
 }
 
 fn header_footer_selection_style_at(
@@ -920,10 +925,6 @@ fn normalize_header_footer_runs(runs: &mut Vec<TextRun>) {
         });
     }
     *runs = normalized;
-}
-
-fn runs_plain_text(runs: &[TextRun]) -> String {
-    runs.iter().map(|run| run.text.as_str()).collect()
 }
 
 fn runs_total_chars(runs: &[TextRun]) -> usize {

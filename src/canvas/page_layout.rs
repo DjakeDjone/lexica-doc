@@ -2,13 +2,16 @@ use eframe::egui::{self, epaint::text::cursor::CCursor, Rect};
 
 use crate::{
     app::CanvasState,
-    document::DocumentState,
-    layout::{centered_page_rect, document_points_to_screen_points, page_content_rect},
+    document::{DocumentState, SectionId},
+    layout::{centered_page_rect, document_points_to_screen_points, section_page_content_rect},
 };
 
 pub(super) struct PageSlice {
     pub(super) page_rect: Rect,
     pub(super) content_rect: Rect,
+    pub(super) section_id: SectionId,
+    pub(super) page_index_within_section: usize,
+    pub(super) section_page_count: usize,
     pub(super) start_y: f32,
     pub(super) end_y: f32,
 }
@@ -58,12 +61,19 @@ pub(super) fn layout_page_stack(
     canvas: &CanvasState,
     galley: &egui::Galley,
     manual_page_break_rows: &[usize],
+    paragraph_start_rows: &[usize],
 ) -> PageLayout {
     let page_gap = document_points_to_screen_points(24.0, canvas.zoom);
-    let base_page_rect =
-        centered_page_rect(viewport, document.page_size, canvas.zoom, egui::Vec2::ZERO);
+    let page_setup = document.default_page_setup();
+    let base_page_rect = centered_page_rect(
+        viewport,
+        page_setup.page_size,
+        canvas.zoom,
+        egui::Vec2::ZERO,
+    );
     let page_size = base_page_rect.size();
-    let content_height = page_content_rect(base_page_rect, document.margins, canvas.zoom).height();
+    let content_height =
+        section_page_content_rect(base_page_rect, page_setup, 14.0, 14.0, canvas.zoom).height();
     let page_ranges = compute_page_ranges(galley, content_height, manual_page_break_rows);
     let page_count = page_ranges.len().max(1);
     let stack_height =
@@ -77,19 +87,77 @@ pub(super) fn layout_page_stack(
     let left = viewport.center().x - page_size.x * 0.5 + canvas.pan.x;
 
     let mut pages = Vec::with_capacity(page_count);
+    let section_starts = section_start_positions(document, galley, paragraph_start_rows);
+    let mut page_sections = Vec::with_capacity(page_ranges.len());
+    for (start_y, _) in &page_ranges {
+        page_sections.push(section_for_y(&section_starts, *start_y));
+    }
+    let mut section_totals = std::collections::HashMap::<SectionId, usize>::new();
+    for section_id in &page_sections {
+        *section_totals.entry(*section_id).or_insert(0) += 1;
+    }
+    let mut section_seen = std::collections::HashMap::<SectionId, usize>::new();
+
     for (index, (start_y, end_y)) in page_ranges.into_iter().enumerate() {
+        let section_id = page_sections[index];
+        let page_index_within_section = section_seen.entry(section_id).or_insert(0);
+        let local_page_index = *page_index_within_section;
+        *page_index_within_section += 1;
+        let section_page_count = section_totals.get(&section_id).copied().unwrap_or(1);
+        let setup = document
+            .section_by_id(section_id)
+            .map(|section| section.page_setup)
+            .unwrap_or(page_setup);
         let min = egui::pos2(left, top + index as f32 * (page_size.y + page_gap));
         let page_rect = Rect::from_min_size(min, page_size);
-        let content_rect = page_content_rect(page_rect, document.margins, canvas.zoom);
+        let content_rect = section_page_content_rect(page_rect, setup, 14.0, 14.0, canvas.zoom);
         pages.push(PageSlice {
             page_rect,
             content_rect,
+            section_id,
+            page_index_within_section: local_page_index,
+            section_page_count,
             start_y,
             end_y,
         });
     }
 
     PageLayout { pages }
+}
+
+fn section_start_positions(
+    document: &DocumentState,
+    galley: &egui::Galley,
+    paragraph_start_rows: &[usize],
+) -> Vec<(f32, SectionId)> {
+    let mut starts: Vec<(f32, SectionId)> = document
+        .sections
+        .iter()
+        .map(|section| {
+            let row = paragraph_start_rows
+                .get(section.starts_at_paragraph)
+                .copied()
+                .unwrap_or(0);
+            let y = galley.rows.get(row).map(|row| row.pos.y).unwrap_or(0.0);
+            (y, section.id)
+        })
+        .collect();
+    starts.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    starts
+}
+
+fn section_for_y(starts: &[(f32, SectionId)], y: f32) -> SectionId {
+    starts
+        .iter()
+        .rev()
+        .find(|(start_y, _)| *start_y <= y + 0.5)
+        .map(|(_, id)| *id)
+        .or_else(|| starts.first().map(|(_, id)| *id))
+        .unwrap_or(1)
 }
 
 fn caret_rect(galley: &egui::Galley, cursor: CCursor, height: f32) -> Rect {

@@ -712,18 +712,80 @@ pub struct Paragraph {
     pub table: Option<DocumentTable>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct PageSize {
     pub width_points: f32,
     pub height_points: f32,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct PageMargins {
     pub top_points: f32,
     pub right_points: f32,
     pub bottom_points: f32,
     pub left_points: f32,
+}
+
+pub type SectionId = usize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub enum HeaderFooterKind {
+    Header,
+    Footer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub enum HeaderFooterVariant {
+    Default,
+    First,
+    Even,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HeaderFooterStory {
+    pub runs: Vec<TextRun>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct HeaderFooterSlot {
+    pub story: HeaderFooterStory,
+    pub linked_to_previous: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SectionHeaderFooter {
+    pub header_default: HeaderFooterSlot,
+    pub header_first: HeaderFooterSlot,
+    pub header_even: HeaderFooterSlot,
+    pub footer_default: HeaderFooterSlot,
+    pub footer_first: HeaderFooterSlot,
+    pub footer_even: HeaderFooterSlot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct PageSetup {
+    pub page_size: PageSize,
+    pub margins: PageMargins,
+    pub header_from_top_points: f32,
+    pub footer_from_bottom_points: f32,
+    pub page_number_start: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Section {
+    pub id: SectionId,
+    pub starts_at_paragraph: usize,
+    pub page_setup: PageSetup,
+    pub different_first_page: bool,
+    pub header_footer: SectionHeaderFooter,
+}
+
+pub struct ResolvedHeaderFooter<'a> {
+    pub section_id: SectionId,
+    pub source_section_id: SectionId,
+    pub variant: HeaderFooterVariant,
+    pub story: &'a HeaderFooterStory,
+    pub inherited: bool,
 }
 
 #[derive(Clone)]
@@ -750,6 +812,7 @@ pub struct DocumentState {
     pub different_first_page: bool,
     pub different_odd_even_pages: bool,
     pub page_number_start: usize,
+    pub sections: Vec<Section>,
 }
 
 impl DocumentState {
@@ -804,6 +867,7 @@ impl DocumentState {
             different_first_page: false,
             different_odd_even_pages: false,
             page_number_start: 1,
+            sections: vec![Section::first(PageSetup::standard())],
         }
     }
 
@@ -834,6 +898,295 @@ impl DocumentState {
             .replace("{sectionpages}", &page_count.to_string())
             .replace("{numpages}", &page_count.to_string())
             .replace("{page}", &displayed_page_number.to_string())
+    }
+
+    pub fn default_page_setup(&self) -> PageSetup {
+        self.sections
+            .first()
+            .map(|section| section.page_setup)
+            .unwrap_or(PageSetup {
+                page_size: self.page_size,
+                margins: self.margins,
+                header_from_top_points: 36.0,
+                footer_from_bottom_points: 36.0,
+                page_number_start: Some(self.page_number_start),
+            })
+    }
+
+    pub fn active_page_size(&self) -> PageSize {
+        self.default_page_setup().page_size
+    }
+
+    pub fn active_margins(&self) -> PageMargins {
+        self.default_page_setup().margins
+    }
+
+    pub fn section_at_paragraph(&self, paragraph_index: usize) -> &Section {
+        self.sections
+            .iter()
+            .rev()
+            .find(|section| section.starts_at_paragraph <= paragraph_index)
+            .or_else(|| self.sections.first())
+            .expect("document always has at least one section")
+    }
+
+    pub fn section_at_paragraph_mut(&mut self, paragraph_index: usize) -> &mut Section {
+        let id = self.section_at_paragraph(paragraph_index).id;
+        self.section_by_id_mut(id)
+            .expect("section id from document should exist")
+    }
+
+    pub fn section_by_id(&self, id: SectionId) -> Option<&Section> {
+        self.sections.iter().find(|section| section.id == id)
+    }
+
+    pub fn section_by_id_mut(&mut self, id: SectionId) -> Option<&mut Section> {
+        self.sections.iter_mut().find(|section| section.id == id)
+    }
+
+    pub fn first_section_id(&self) -> SectionId {
+        self.sections.first().map(|section| section.id).unwrap_or(1)
+    }
+
+    pub fn insert_section_break_before_paragraph(&mut self, paragraph_index: usize) -> SectionId {
+        self.ensure_paragraph_style_count();
+        let paragraph_index = paragraph_index.min(self.paragraph_count().saturating_sub(1));
+        if let Some(existing) = self
+            .sections
+            .iter()
+            .find(|section| section.starts_at_paragraph == paragraph_index)
+        {
+            return existing.id;
+        }
+
+        let previous = self
+            .section_at_paragraph(paragraph_index.saturating_sub(1))
+            .clone();
+        let next_id = self
+            .sections
+            .iter()
+            .map(|section| section.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.sections
+            .push(Section::linked_from(next_id, paragraph_index, &previous));
+        self.sections
+            .sort_by_key(|section| section.starts_at_paragraph);
+        next_id
+    }
+
+    pub fn resolve_header_footer_slot(
+        &self,
+        section_id: SectionId,
+        kind: HeaderFooterKind,
+        variant: HeaderFooterVariant,
+    ) -> ResolvedHeaderFooter<'_> {
+        let Some(section_index) = self
+            .sections
+            .iter()
+            .position(|section| section.id == section_id)
+        else {
+            let section = self.sections.first().expect("document has section");
+            return ResolvedHeaderFooter {
+                section_id: section.id,
+                source_section_id: section.id,
+                variant,
+                story: section.header_footer.slot(kind, variant).story_ref(),
+                inherited: false,
+            };
+        };
+
+        let section = &self.sections[section_index];
+        let slot = section.header_footer.slot(kind, variant);
+        if slot.linked_to_previous && section_index > 0 {
+            let previous_id = self.sections[section_index - 1].id;
+            let mut resolved = self.resolve_header_footer_slot(previous_id, kind, variant);
+            resolved.section_id = section_id;
+            resolved.inherited = true;
+            return resolved;
+        }
+
+        ResolvedHeaderFooter {
+            section_id,
+            source_section_id: section.id,
+            variant,
+            story: slot.story_ref(),
+            inherited: false,
+        }
+    }
+
+    pub fn header_footer_variant_for_page(
+        &self,
+        section_id: SectionId,
+        page_index_within_section: usize,
+        _kind: HeaderFooterKind,
+    ) -> HeaderFooterVariant {
+        let Some(section) = self.section_by_id(section_id) else {
+            return HeaderFooterVariant::Default;
+        };
+        if section.different_first_page && page_index_within_section == 0 {
+            HeaderFooterVariant::First
+        } else if self.different_odd_even_pages && (page_index_within_section + 1) % 2 == 0 {
+            HeaderFooterVariant::Even
+        } else {
+            HeaderFooterVariant::Default
+        }
+    }
+
+    pub fn render_page_field_for_section_page(
+        &self,
+        text: &str,
+        section_id: SectionId,
+        page_index_within_section: usize,
+        _absolute_page_index: usize,
+        absolute_page_count: usize,
+        section_page_count: usize,
+    ) -> String {
+        let displayed_page_number =
+            self.displayed_page_number(section_id, page_index_within_section);
+        text.replace("{ SECTIONPAGES }", &section_page_count.to_string())
+            .replace("{ SECTIONPAGES}", &section_page_count.to_string())
+            .replace("{SECTIONPAGES }", &section_page_count.to_string())
+            .replace("{SECTIONPAGES}", &section_page_count.to_string())
+            .replace("{ NUMPAGES }", &absolute_page_count.to_string())
+            .replace("{ NUMPAGES}", &absolute_page_count.to_string())
+            .replace("{NUMPAGES }", &absolute_page_count.to_string())
+            .replace("{NUMPAGES}", &absolute_page_count.to_string())
+            .replace("{ PAGE }", &displayed_page_number.to_string())
+            .replace("{ PAGE}", &displayed_page_number.to_string())
+            .replace("{PAGE }", &displayed_page_number.to_string())
+            .replace("{PAGE}", &displayed_page_number.to_string())
+            .replace("{pagecount}", &absolute_page_count.to_string())
+            .replace("{pages}", &absolute_page_count.to_string())
+            .replace("{sectionpages}", &section_page_count.to_string())
+            .replace("{numpages}", &absolute_page_count.to_string())
+            .replace("{page}", &displayed_page_number.to_string())
+    }
+
+    pub fn displayed_page_number(
+        &self,
+        section_id: SectionId,
+        page_index_within_section: usize,
+    ) -> usize {
+        let Some(section_index) = self
+            .sections
+            .iter()
+            .position(|section| section.id == section_id)
+        else {
+            return page_index_within_section + 1;
+        };
+        if let Some(start) = self.sections[section_index].page_setup.page_number_start {
+            return start + page_index_within_section;
+        }
+
+        let mut current = 1usize;
+        for section in self.sections.iter().take(section_index + 1) {
+            if let Some(start) = section.page_setup.page_number_start {
+                current = start;
+            }
+            if section.id == section_id {
+                return current + page_index_within_section;
+            }
+        }
+        page_index_within_section + 1
+    }
+
+    pub fn header_footer_story(
+        &self,
+        section_id: SectionId,
+        kind: HeaderFooterKind,
+        variant: HeaderFooterVariant,
+    ) -> Option<&HeaderFooterStory> {
+        self.section_by_id(section_id)
+            .map(|section| section.header_footer.slot(kind, variant).story_ref())
+    }
+
+    pub fn header_footer_story_mut_materialized(
+        &mut self,
+        section_id: SectionId,
+        kind: HeaderFooterKind,
+        variant: HeaderFooterVariant,
+    ) -> Option<&mut HeaderFooterStory> {
+        let inherited_story = self
+            .resolve_header_footer_slot(section_id, kind, variant)
+            .story
+            .clone();
+        let section = self.section_by_id_mut(section_id)?;
+        let slot = section.header_footer.slot_mut(kind, variant);
+        if slot.linked_to_previous {
+            slot.story = inherited_story;
+            slot.linked_to_previous = false;
+        }
+        Some(&mut slot.story)
+    }
+
+    pub fn set_header_footer_link(
+        &mut self,
+        section_id: SectionId,
+        kind: HeaderFooterKind,
+        variant: HeaderFooterVariant,
+        linked: bool,
+    ) {
+        if let Some(section_index) = self
+            .sections
+            .iter()
+            .position(|section| section.id == section_id)
+        {
+            if section_index == 0 && linked {
+                return;
+            }
+            let slot = self.sections[section_index]
+                .header_footer
+                .slot_mut(kind, variant);
+            slot.linked_to_previous = linked;
+        }
+    }
+
+    pub fn header_footer_linked(
+        &self,
+        section_id: SectionId,
+        kind: HeaderFooterKind,
+        variant: HeaderFooterVariant,
+    ) -> bool {
+        self.section_by_id(section_id)
+            .map(|section| section.header_footer.slot(kind, variant).linked_to_previous)
+            .unwrap_or(false)
+    }
+
+    pub fn clear_header_footer_slot(
+        &mut self,
+        section_id: SectionId,
+        kind: HeaderFooterKind,
+        variant: HeaderFooterVariant,
+    ) {
+        if let Some(section) = self.section_by_id_mut(section_id) {
+            let slot = section.header_footer.slot_mut(kind, variant);
+            slot.story = HeaderFooterStory::empty();
+            slot.linked_to_previous = false;
+        }
+    }
+
+    pub fn sync_compat_from_first_section(&mut self) {
+        let Some(section) = self.sections.first() else {
+            return;
+        };
+        self.page_size = section.page_setup.page_size;
+        self.margins = section.page_setup.margins;
+        self.different_first_page = section.different_first_page;
+        self.page_number_start = section.page_setup.page_number_start.unwrap_or(1);
+        self.header_runs = section.header_footer.header_default.story.runs.clone();
+        self.footer_runs = section.header_footer.footer_default.story.runs.clone();
+        self.first_page_header_runs = section.header_footer.header_first.story.runs.clone();
+        self.first_page_footer_runs = section.header_footer.footer_first.story.runs.clone();
+        self.even_page_header_runs = section.header_footer.header_even.story.runs.clone();
+        self.even_page_footer_runs = section.header_footer.footer_even.story.runs.clone();
+        self.header_text = plain_text_from_runs(&self.header_runs);
+        self.footer_text = plain_text_from_runs(&self.footer_runs);
+        self.first_page_header_text = plain_text_from_runs(&self.first_page_header_runs);
+        self.first_page_footer_text = plain_text_from_runs(&self.first_page_footer_runs);
+        self.even_page_header_text = plain_text_from_runs(&self.even_page_header_runs);
+        self.even_page_footer_text = plain_text_from_runs(&self.even_page_footer_runs);
     }
 
     pub fn header_template_for_page(&self, page_number: usize) -> &str {
@@ -2013,11 +2366,119 @@ impl PageMargins {
     }
 }
 
+impl PageSetup {
+    pub const fn standard() -> Self {
+        Self {
+            page_size: PageSize::a4(),
+            margins: PageMargins::standard(),
+            header_from_top_points: 36.0,
+            footer_from_bottom_points: 36.0,
+            page_number_start: Some(1),
+        }
+    }
+}
+
+impl HeaderFooterStory {
+    pub fn empty() -> Self {
+        Self {
+            runs: empty_header_footer_runs(),
+        }
+    }
+
+    pub fn from_runs(runs: Vec<TextRun>) -> Self {
+        Self { runs }
+    }
+
+    pub fn plain_text(&self) -> String {
+        plain_text_from_runs(&self.runs)
+    }
+}
+
+impl HeaderFooterSlot {
+    pub fn empty(linked_to_previous: bool) -> Self {
+        Self {
+            story: HeaderFooterStory::empty(),
+            linked_to_previous,
+        }
+    }
+
+    fn story_ref(&self) -> &HeaderFooterStory {
+        &self.story
+    }
+}
+
+impl SectionHeaderFooter {
+    pub fn empty(linked_to_previous: bool) -> Self {
+        Self {
+            header_default: HeaderFooterSlot::empty(linked_to_previous),
+            header_first: HeaderFooterSlot::empty(linked_to_previous),
+            header_even: HeaderFooterSlot::empty(linked_to_previous),
+            footer_default: HeaderFooterSlot::empty(linked_to_previous),
+            footer_first: HeaderFooterSlot::empty(linked_to_previous),
+            footer_even: HeaderFooterSlot::empty(linked_to_previous),
+        }
+    }
+
+    pub fn slot(&self, kind: HeaderFooterKind, variant: HeaderFooterVariant) -> &HeaderFooterSlot {
+        match (kind, variant) {
+            (HeaderFooterKind::Header, HeaderFooterVariant::Default) => &self.header_default,
+            (HeaderFooterKind::Header, HeaderFooterVariant::First) => &self.header_first,
+            (HeaderFooterKind::Header, HeaderFooterVariant::Even) => &self.header_even,
+            (HeaderFooterKind::Footer, HeaderFooterVariant::Default) => &self.footer_default,
+            (HeaderFooterKind::Footer, HeaderFooterVariant::First) => &self.footer_first,
+            (HeaderFooterKind::Footer, HeaderFooterVariant::Even) => &self.footer_even,
+        }
+    }
+
+    pub fn slot_mut(
+        &mut self,
+        kind: HeaderFooterKind,
+        variant: HeaderFooterVariant,
+    ) -> &mut HeaderFooterSlot {
+        match (kind, variant) {
+            (HeaderFooterKind::Header, HeaderFooterVariant::Default) => &mut self.header_default,
+            (HeaderFooterKind::Header, HeaderFooterVariant::First) => &mut self.header_first,
+            (HeaderFooterKind::Header, HeaderFooterVariant::Even) => &mut self.header_even,
+            (HeaderFooterKind::Footer, HeaderFooterVariant::Default) => &mut self.footer_default,
+            (HeaderFooterKind::Footer, HeaderFooterVariant::First) => &mut self.footer_first,
+            (HeaderFooterKind::Footer, HeaderFooterVariant::Even) => &mut self.footer_even,
+        }
+    }
+}
+
+impl Section {
+    pub fn first(page_setup: PageSetup) -> Self {
+        Self {
+            id: 1,
+            starts_at_paragraph: 0,
+            page_setup,
+            different_first_page: false,
+            header_footer: SectionHeaderFooter::empty(false),
+        }
+    }
+
+    pub fn linked_from(id: SectionId, starts_at_paragraph: usize, previous: &Section) -> Self {
+        let mut page_setup = previous.page_setup;
+        page_setup.page_number_start = None;
+        Self {
+            id,
+            starts_at_paragraph,
+            page_setup,
+            different_first_page: previous.different_first_page,
+            header_footer: SectionHeaderFooter::empty(true),
+        }
+    }
+}
+
 fn empty_header_footer_runs() -> Vec<TextRun> {
     vec![TextRun {
         text: String::new(),
         style: CharacterStyle::default(),
     }]
+}
+
+fn plain_text_from_runs(runs: &[TextRun]) -> String {
+    runs.iter().map(|run| run.text.as_str()).collect()
 }
 
 pub(crate) fn text_format(style: CharacterStyle, zoom: f32) -> TextFormat {
@@ -2091,9 +2552,9 @@ mod tests {
 
     use super::{
         empty_header_footer_runs, export::plain_text_from_runs, text_format, CharacterStyle,
-        DocumentImage, DocumentState, FontChoice, ImageLayoutMode, ImageRendering, ListKind,
-        WrapMode, DOCX_BODY_BOLD, DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD,
-        OBJECT_REPLACEMENT_CHAR,
+        DocumentImage, DocumentState, FontChoice, HeaderFooterKind, HeaderFooterStory,
+        HeaderFooterVariant, ImageLayoutMode, ImageRendering, ListKind, TextRun, WrapMode,
+        DOCX_BODY_BOLD, DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD, OBJECT_REPLACEMENT_CHAR,
     };
 
     fn test_image(id: usize) -> DocumentImage {
@@ -2343,6 +2804,7 @@ mod tests {
             different_first_page: false,
             different_odd_even_pages: false,
             page_number_start: 1,
+            sections: vec![super::Section::first(super::PageSetup::standard())],
         };
 
         let cursor = document
@@ -2405,6 +2867,7 @@ mod tests {
             different_first_page: false,
             different_odd_even_pages: false,
             page_number_start: 1,
+            sections: vec![super::Section::first(super::PageSetup::standard())],
         };
 
         let cursor = document
@@ -2473,6 +2936,99 @@ mod tests {
                 7
             ),
             "Page 4 / 4 of 7 / 7 / 7"
+        );
+    }
+
+    #[test]
+    fn resolves_linked_section_header_to_previous_section() {
+        let mut document = DocumentState::bootstrap();
+        document.sections[0].header_footer.header_default.story =
+            HeaderFooterStory::from_runs(vec![TextRun {
+                text: "Section 1".to_owned(),
+                style: CharacterStyle::default(),
+            }]);
+        let section_id = document.insert_section_break_before_paragraph(1);
+
+        let resolved = document.resolve_header_footer_slot(
+            section_id,
+            HeaderFooterKind::Header,
+            HeaderFooterVariant::Default,
+        );
+
+        assert!(resolved.inherited);
+        assert_eq!(resolved.source_section_id, 1);
+        assert_eq!(resolved.story.plain_text(), "Section 1");
+    }
+
+    #[test]
+    fn editing_linked_header_materializes_local_copy() {
+        let mut document = DocumentState::bootstrap();
+        document.sections[0].header_footer.header_default.story =
+            HeaderFooterStory::from_runs(vec![TextRun {
+                text: "Inherited".to_owned(),
+                style: CharacterStyle::default(),
+            }]);
+        let section_id = document.insert_section_break_before_paragraph(1);
+        let story = document
+            .header_footer_story_mut_materialized(
+                section_id,
+                HeaderFooterKind::Header,
+                HeaderFooterVariant::Default,
+            )
+            .expect("section story");
+        story.runs[0].text = "Local".to_owned();
+
+        assert!(!document.header_footer_linked(
+            section_id,
+            HeaderFooterKind::Header,
+            HeaderFooterVariant::Default
+        ));
+        assert_eq!(
+            document
+                .resolve_header_footer_slot(
+                    section_id,
+                    HeaderFooterKind::Header,
+                    HeaderFooterVariant::Default
+                )
+                .story
+                .plain_text(),
+            "Local"
+        );
+        assert_eq!(
+            document.sections[0]
+                .header_footer
+                .header_default
+                .story
+                .plain_text(),
+            "Inherited"
+        );
+    }
+
+    #[test]
+    fn section_variants_and_page_fields_resolve_per_section() {
+        let mut document = DocumentState::bootstrap();
+        document.different_odd_even_pages = true;
+        document.sections[0].different_first_page = true;
+        document.sections[0].page_setup.page_number_start = Some(3);
+
+        assert_eq!(
+            document.header_footer_variant_for_page(1, 0, HeaderFooterKind::Header),
+            HeaderFooterVariant::First
+        );
+        assert_eq!(
+            document.header_footer_variant_for_page(1, 1, HeaderFooterKind::Header),
+            HeaderFooterVariant::Even
+        );
+        assert_eq!(
+            document.render_page_field_for_section_page(
+                "Page { PAGE } of { NUMPAGES } / { SECTIONPAGES }",
+                1,
+                1,
+                1,
+                9,
+                4
+            ),
+            "Page 4 of 9 / 4"
         );
     }
 

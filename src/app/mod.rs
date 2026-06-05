@@ -39,8 +39,8 @@ use actions::open_document_from_path;
 use actions::{handle_global_shortcuts, open_document, save_document, save_document_as_with_name};
 use backstage::{paint_backstage, BackstageOutput, BackstageState};
 pub use canvas_state::{
-    ActiveHeaderFooter, CanvasState, HeaderFooterKind, ImageMoveDrag, ImageResizeDrag,
-    ResizeHandle, TableResizeDrag, TableResizeHandleRect, TableResizeKind, ZoomMode,
+    ActiveHeaderFooter, CanvasState, ImageMoveDrag, ImageResizeDrag, ResizeHandle, TableResizeDrag,
+    TableResizeHandleRect, TableResizeKind, ZoomMode,
 };
 use chrome::{paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar, RibbonTab};
 pub use history::ChangeHistory;
@@ -632,6 +632,7 @@ impl App for WorsApp {
                         &mut self.active_tab,
                         self.canvas.selected_image_id,
                         self.canvas.active_table_cell,
+                        self.canvas.active_header_footer.is_some(),
                         palette,
                     );
                 });
@@ -787,17 +788,21 @@ impl App for WorsApp {
 
         // Auto-switch to contextual tabs when an object is selected.
         match (
+            self.canvas.active_header_footer,
             self.canvas.selected_image_id,
             self.canvas.active_table_cell,
             self.active_tab,
         ) {
-            (Some(_), _, tab) if tab != RibbonTab::Picture => {
+            (Some(_), _, _, tab) if tab != RibbonTab::HeaderFooter => {
+                self.active_tab = RibbonTab::HeaderFooter;
+            }
+            (None, Some(_), _, tab) if tab != RibbonTab::Picture => {
                 self.active_tab = RibbonTab::Picture;
             }
-            (None, Some(_), tab) if tab != RibbonTab::Table => {
+            (None, None, Some(_), tab) if tab != RibbonTab::Table => {
                 self.active_tab = RibbonTab::Table;
             }
-            (None, None, RibbonTab::Picture | RibbonTab::Table) => {
+            (None, None, None, RibbonTab::HeaderFooter | RibbonTab::Picture | RibbonTab::Table) => {
                 self.active_tab = RibbonTab::Home;
             }
             _ => {}
