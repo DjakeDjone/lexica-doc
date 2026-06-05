@@ -6,7 +6,7 @@ use crate::{
     layout::{centered_page_rect, document_points_to_screen_points, section_page_content_rect},
 };
 
-pub(super) struct PageSlice {
+pub(crate) struct PageSlice {
     pub(super) page_rect: Rect,
     pub(super) content_rect: Rect,
     pub(super) section_id: SectionId,
@@ -16,7 +16,7 @@ pub(super) struct PageSlice {
     pub(super) end_y: f32,
 }
 
-pub(super) struct PageLayout {
+pub(crate) struct PageLayout {
     pub(super) pages: Vec<PageSlice>,
 }
 

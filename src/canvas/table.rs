@@ -5,12 +5,13 @@ use eframe::egui::{
     epaint::text::cursor::CCursor,
     epaint::CornerRadius,
     text_selection::visuals::{paint_text_cursor, paint_text_selection},
+    text_selection::CCursorRange,
     Align2, Color32, FontFamily, FontId, Rect, Stroke, StrokeKind,
 };
 
 use crate::{
-    app::{CanvasState, TableResizeHandleRect, TableResizeKind},
-    document::{text_format, DocumentImage, DocumentTable, TableCell, OBJECT_REPLACEMENT_CHAR},
+    app::{CanvasState, TableResizeHandleRect, TableResizeKind, TableResizeDrag, ChangeHistory},
+    document::{text_format, DocumentImage, DocumentTable, TableCell, OBJECT_REPLACEMENT_CHAR, DocumentState},
     layout::document_points_to_screen_points,
 };
 
@@ -369,4 +370,223 @@ pub(super) fn table_row_heights_screen(
     }
 
     row_heights
+}
+
+pub(super) fn table_cell_hit(canvas: &CanvasState, pointer_pos: egui::Pos2) -> Option<(usize, usize, usize)> {
+    canvas
+        .table_cell_rects
+        .iter()
+        .rev()
+        .find(|(_, _, _, rect)| rect.contains(pointer_pos))
+        .map(|(table_id, row, col, _)| (*table_id, *row, *col))
+}
+
+pub(super) fn table_cell_content_rect(
+    canvas: &CanvasState,
+    cell: (usize, usize, usize),
+) -> Option<egui::Rect> {
+    canvas
+        .table_cell_content_rects
+        .iter()
+        .find(|(table_id, row, col, _)| (*table_id, *row, *col) == cell)
+        .map(|(_, _, _, rect)| *rect)
+}
+
+pub(super) fn table_cell_cursor_from_pointer(
+    ui: &egui::Ui,
+    canvas: &CanvasState,
+    document: &DocumentState,
+    cell_ref: (usize, usize, usize),
+    pointer_pos: egui::Pos2,
+) -> Option<CCursor> {
+    let content_rect = table_cell_content_rect(canvas, cell_ref)?;
+    let cell = document
+        .table_by_id(cell_ref.0)?
+        .rows
+        .get(cell_ref.1)?
+        .get(cell_ref.2)?;
+    let galley = table_cell_text_galley(
+        ui.painter(),
+        cell,
+        content_rect.width().max(1.0),
+        canvas.zoom,
+    );
+    Some(galley.cursor_from_pos(pointer_pos - content_rect.min))
+}
+
+pub(super) fn table_resize_handle_hit(
+    canvas: &CanvasState,
+    pointer_pos: egui::Pos2,
+) -> Option<TableResizeHandleRect> {
+    canvas
+        .table_resize_handles
+        .iter()
+        .rev()
+        .find(|handle| handle.rect.contains(pointer_pos))
+        .copied()
+}
+
+pub(super) fn handle_table_interaction(
+    ui: &mut egui::Ui,
+    response: &egui::Response,
+    canvas: &mut CanvasState,
+    document: &mut DocumentState,
+    history: &mut ChangeHistory,
+) -> (bool, bool) {
+    const MIN_SIZE_POINTS: f32 = 18.0;
+    let mut document_changed = false;
+
+    if let Some(hover_pos) = ui.ctx().pointer_hover_pos() {
+        if let Some(handle) = table_resize_handle_hit(canvas, hover_pos) {
+            ui.ctx().set_cursor_icon(match handle.kind {
+                TableResizeKind::Column { .. } => egui::CursorIcon::ResizeEast,
+                TableResizeKind::Row { .. } => egui::CursorIcon::ResizeSouth,
+            });
+        } else if table_cell_hit(canvas, hover_pos).is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+        }
+    }
+
+    if !response.dragged() {
+        canvas.table_resize_drag = None;
+    }
+
+    if response.dragged() {
+        if let Some(drag) = canvas.table_resize_drag.as_ref() {
+            if let Some(pointer_pos) = response.interact_pointer_pos() {
+                let zoom = canvas.zoom.max(0.01);
+                match drag.kind {
+                    TableResizeKind::Column { left_col } => {
+                        let delta = (pointer_pos.x - drag.start_ptr.x) / zoom;
+                        let total = drag.first_points + drag.second_points;
+                        let first = (drag.first_points + delta)
+                            .clamp(MIN_SIZE_POINTS, total - MIN_SIZE_POINTS);
+                        let second = total - first;
+                        document.resize_table_column_pair(drag.table_id, left_col, first, second);
+                    }
+                    TableResizeKind::Row { top_row } => {
+                        let delta = (pointer_pos.y - drag.start_ptr.y) / zoom;
+                        let total = drag.first_points + drag.second_points;
+                        let first = (drag.first_points + delta).clamp(12.0, total - 12.0);
+                        let second = total - first;
+                        document.resize_table_row_pair(drag.table_id, top_row, first, second);
+                    }
+                }
+                document_changed = true;
+            }
+            return (true, document_changed);
+        }
+
+        if let Some(cell) = canvas.active_table_cell {
+            if let Some(pointer_pos) = response.interact_pointer_pos() {
+                if let Some(cursor) =
+                    table_cell_cursor_from_pointer(ui, canvas, document, cell, pointer_pos)
+                {
+                    canvas.table_cell_selection.primary = cursor;
+                    canvas.last_interaction_time = ui.input(|i| i.time);
+                    return (true, document_changed);
+                }
+            }
+        }
+    }
+
+    let Some(pointer_pos) = response.interact_pointer_pos() else {
+        return (false, document_changed);
+    };
+
+    if response.drag_started() {
+        if let Some(handle) = table_resize_handle_hit(canvas, pointer_pos) {
+            if let Some(table) = document.table_by_id(handle.table_id) {
+                let dimensions = match handle.kind {
+                    TableResizeKind::Column { left_col } => {
+                        if left_col + 1 >= table.col_widths_points.len() {
+                            None
+                        } else {
+                            Some((
+                                table.col_widths_points[left_col],
+                                table.col_widths_points[left_col + 1],
+                            ))
+                        }
+                    }
+                    TableResizeKind::Row { top_row } => {
+                        if top_row + 1 >= table.row_heights_points.len() {
+                            None
+                        } else {
+                            Some((
+                                table.row_heights_points[top_row],
+                                table.row_heights_points[top_row + 1],
+                            ))
+                        }
+                    }
+                };
+                if let Some((first_points, second_points)) = dimensions {
+                    history.checkpoint(document, ui.input(|i| i.time));
+                    canvas.table_resize_drag = Some(TableResizeDrag {
+                        table_id: handle.table_id,
+                        kind: handle.kind,
+                        start_ptr: pointer_pos,
+                        first_points,
+                        second_points,
+                    });
+                    canvas.active_table_cell = None;
+                    canvas.selected_image_id = None;
+                    return (true, document_changed);
+                }
+            }
+        }
+
+        if let Some(cell) = table_cell_hit(canvas, pointer_pos) {
+            response.request_focus();
+            canvas.active_table_cell = Some(cell);
+            if let Some(cursor) =
+                table_cell_cursor_from_pointer(ui, canvas, document, cell, pointer_pos)
+            {
+                if ui.input(|i| i.modifiers.shift) {
+                    canvas.table_cell_selection.primary = cursor;
+                } else {
+                    canvas.table_cell_selection = CCursorRange::one(cursor);
+                }
+                if let Some(style) =
+                    document.table_cell_style_at(cell.0, cell.1, cell.2, cursor.index)
+                {
+                    canvas.active_style = style;
+                }
+            }
+            canvas.selected_image_id = None;
+            canvas.resize_drag = None;
+            canvas.move_drag = None;
+            canvas.last_interaction_time = ui.input(|i| i.time);
+            return (true, document_changed);
+        }
+    }
+
+    if response.clicked() {
+        if let Some(cell) = table_cell_hit(canvas, pointer_pos) {
+            response.request_focus();
+            canvas.active_table_cell = Some(cell);
+            if let Some(cursor) =
+                table_cell_cursor_from_pointer(ui, canvas, document, cell, pointer_pos)
+            {
+                if ui.input(|i| i.modifiers.shift) {
+                    canvas.table_cell_selection.primary = cursor;
+                } else {
+                    canvas.table_cell_selection = CCursorRange::one(cursor);
+                }
+                if let Some(style) =
+                    document.table_cell_style_at(cell.0, cell.1, cell.2, cursor.index)
+                {
+                    canvas.active_style = style;
+                }
+            }
+            canvas.selected_image_id = None;
+            canvas.resize_drag = None;
+            canvas.move_drag = None;
+            canvas.last_interaction_time = ui.input(|i| i.time);
+            return (true, document_changed);
+        }
+        canvas.active_table_cell = None;
+        canvas.table_cell_selection = CCursorRange::default();
+    }
+
+    (false, document_changed)
 }

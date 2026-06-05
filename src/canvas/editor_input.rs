@@ -477,63 +477,23 @@ fn handle_shortcut_key(
     key: Key,
     modifiers: Modifiers,
     history: &mut ChangeHistory,
-    ui: &mut egui::Ui,
+    _ui: &mut egui::Ui,
 ) -> bool {
     if !modifiers.command {
         return false;
     }
 
-    let range = canvas.selection.as_sorted_char_range();
     match key {
         Key::B => {
-            let now = ui.input(|i| i.time);
-            history.checkpoint(document, now);
-            let next = !canvas.active_style.bold;
-            if let Some((table_id, row, col)) = canvas.active_table_cell {
-                let range = canvas.table_cell_selection.as_sorted_char_range();
-                if range.start < range.end {
-                    document.apply_style_to_table_cell_range(table_id, row, col, range, |style| {
-                        style.bold = next
-                    });
-                }
-            } else if range.start < range.end {
-                document.apply_style_to_range(range, |style| style.bold = next);
-            }
-            canvas.active_style.bold = next;
+            crate::app::actions::toggle_bold(document, canvas, history);
             true
         }
         Key::I => {
-            let now = ui.input(|i| i.time);
-            history.checkpoint(document, now);
-            let next = !canvas.active_style.italic;
-            if let Some((table_id, row, col)) = canvas.active_table_cell {
-                let range = canvas.table_cell_selection.as_sorted_char_range();
-                if range.start < range.end {
-                    document.apply_style_to_table_cell_range(table_id, row, col, range, |style| {
-                        style.italic = next
-                    });
-                }
-            } else if range.start < range.end {
-                document.apply_style_to_range(range, |style| style.italic = next);
-            }
-            canvas.active_style.italic = next;
+            crate::app::actions::toggle_italic(document, canvas, history);
             true
         }
         Key::U => {
-            let now = ui.input(|i| i.time);
-            history.checkpoint(document, now);
-            let next = !canvas.active_style.underline;
-            if let Some((table_id, row, col)) = canvas.active_table_cell {
-                let range = canvas.table_cell_selection.as_sorted_char_range();
-                if range.start < range.end {
-                    document.apply_style_to_table_cell_range(table_id, row, col, range, |style| {
-                        style.underline = next
-                    });
-                }
-            } else if range.start < range.end {
-                document.apply_style_to_range(range, |style| style.underline = next);
-            }
-            canvas.active_style.underline = next;
+            crate::app::actions::toggle_underline(document, canvas, history);
             true
         }
         Key::A if canvas.active_table_cell.is_some() => {
