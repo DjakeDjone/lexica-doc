@@ -30,7 +30,7 @@ pub(super) enum RibbonTab {
     Design,
     Layout,
     View,
-    Grammer,
+    Grammar,
     HeaderFooter,
     Picture,
     Table,
@@ -61,7 +61,7 @@ impl RibbonTab {
         Self::Design,
         Self::Layout,
         Self::View,
-        Self::Grammer,
+        Self::Grammar,
     ];
 
     const fn label(self) -> &'static str {
@@ -71,7 +71,7 @@ impl RibbonTab {
             Self::Design => "Design",
             Self::Layout => "Layout",
             Self::View => "View",
-            Self::Grammer => "Grammer",
+            Self::Grammar => "Grammar",
             Self::HeaderFooter => "Header & Footer",
             Self::Picture => "Picture Format",
             Self::Table => "Table Format",
@@ -502,7 +502,7 @@ pub(super) fn paint_ribbon(
                         palette,
                     );
                 }
-                RibbonTab::Grammer => {
+                RibbonTab::Grammar => {
                     ribbon_grammer_actions_group(
                         ui,
                         grammar_status,

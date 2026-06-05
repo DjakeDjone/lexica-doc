@@ -123,21 +123,55 @@ pub fn paint_document_canvas(
     );
     let content_size =
         section_page_content_rect(base_page_rect, default_setup, 14.0, 14.0, canvas.zoom).size();
-    let mut document_layout = layout_document(ui, document, canvas, content_size.x);
-    let page_layout = layout_page_stack(
-        viewport,
-        document,
-        canvas,
-        &document_layout.galley,
-        &document_layout.manual_page_break_rows,
-        &document_layout.paragraph_start_rows,
-    );
 
     if canvas.active_header_footer.is_some()
         && ui.input(|input| input.key_pressed(egui::Key::Escape))
     {
         canvas.active_header_footer = None;
     }
+
+    let has_focus = ui.memory(|mem| mem.has_focus(editor_id));
+    if has_focus {
+        ui.memory_mut(|mem| {
+            mem.set_focus_lock_filter(
+                editor_id,
+                EventFilter {
+                    tab: true,
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    escape: false,
+                },
+            );
+        });
+    }
+
+    let (mut document_layout, page_layout) = if has_focus && canvas.active_header_footer.is_none() {
+        let dl = layout_document(ui, document, canvas, content_size.x);
+        let changed = handle_keyboard_input(ui, document, canvas, &dl.galley, history);
+        if changed {
+            output.text_changed = true;
+            let dl2 = layout_document(ui, document, canvas, content_size.x);
+            let pl = layout_page_stack(
+                viewport, document, canvas,
+                &dl2.galley, &dl2.manual_page_break_rows, &dl2.paragraph_start_rows,
+            );
+            (dl2, pl)
+        } else {
+            let pl = layout_page_stack(
+                viewport, document, canvas,
+                &dl.galley, &dl.manual_page_break_rows, &dl.paragraph_start_rows,
+            );
+            (dl, pl)
+        }
+    } else {
+        let dl = layout_document(ui, document, canvas, content_size.x);
+        let pl = layout_page_stack(
+            viewport, document, canvas,
+            &dl.galley, &dl.manual_page_break_rows, &dl.paragraph_start_rows,
+        );
+        (dl, pl)
+    };
+
     if response.double_clicked() {
         if let Some(pointer_pos) = response.interact_pointer_pos() {
             if let Some(active) = header_footer_hit(&page_layout, document, canvas, pointer_pos) {
@@ -158,28 +192,6 @@ pub fn paint_document_canvas(
                 canvas.active_header_footer = None;
             }
         }
-    }
-
-    let has_focus = ui.memory(|mem| mem.has_focus(editor_id));
-    if has_focus {
-        ui.memory_mut(|mem| {
-            mem.set_focus_lock_filter(
-                editor_id,
-                EventFilter {
-                    tab: true,
-                    horizontal_arrows: true,
-                    vertical_arrows: true,
-                    escape: false,
-                },
-            );
-        });
-    }
-    if has_focus
-        && canvas.active_header_footer.is_none()
-        && handle_keyboard_input(ui, document, canvas, &document_layout.galley, history)
-    {
-        output.text_changed = true;
-        document_layout = layout_document(ui, document, canvas, content_size.x);
     }
 
     if has_focus && !canvas.selection.is_empty() {

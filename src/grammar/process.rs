@@ -58,7 +58,7 @@ pub fn spawn_languagetool(config: &GrammarConfig) -> Result<Child> {
     let libs_dir = parent_dir.join("libs");
     if !libs_dir.is_dir() {
         bail!(
-            "LanguageTool distribution is incomplete: missing {}. Re-download LanguageTool from the Grammer tab.",
+            "LanguageTool distribution is incomplete: missing {}. Re-download LanguageTool from the Grammar tab.",
             libs_dir.display()
         );
     }

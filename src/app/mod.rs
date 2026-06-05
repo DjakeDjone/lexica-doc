@@ -100,6 +100,7 @@ pub struct WorsApp {
     #[cfg(not(target_arch = "wasm32"))]
     grammar_download_rx: Option<mpsc::UnboundedReceiver<GrammarDownloadResult>>,
     grammar_auto_check: bool,
+    tracked_path: Option<PathBuf>,
 }
 
 const LOGO_BYTES: &[u8] = include_bytes!("../../assets/logo.png");
@@ -193,6 +194,7 @@ impl WorsApp {
             #[cfg(not(target_arch = "wasm32"))]
             grammar_download_rx: None,
             grammar_auto_check: true,
+            tracked_path: None,
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -782,8 +784,11 @@ impl App for WorsApp {
             self.request_grammar_check(false);
         }
 
-        if let Some(path) = self.current_path.clone() {
-            self.remember_recent_file(path);
+        if self.current_path != self.tracked_path {
+            self.tracked_path = self.current_path.clone();
+            if let Some(ref path) = self.current_path {
+                self.remember_recent_file(path.clone());
+            }
         }
 
         // Auto-switch to contextual tabs when an object is selected.

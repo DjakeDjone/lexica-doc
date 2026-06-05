@@ -97,11 +97,9 @@ impl GrammarChecker {
             .send()
             .await;
 
-        let response = match send_result {
-            Ok(response) => response,
-            Err(err) if err.is_connect() => return Ok(Vec::new()),
-            Err(err) => return Err(err.into()),
-        };
+        let response = send_result.map_err(|err| {
+            anyhow::anyhow!("LanguageTool connection failed on port {}: {err}", self.port)
+        })?;
 
         let payload: LtCheckResponse = response.error_for_status()?.json().await?;
         Ok(payload

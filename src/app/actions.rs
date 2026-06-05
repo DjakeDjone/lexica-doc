@@ -490,6 +490,21 @@ pub(super) fn insert_image(
     }
 }
 
+fn redo(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+) -> bool {
+    if history.redo(document) {
+        canvas.image_textures.clear();
+        *status_message = "Redo".to_owned();
+        true
+    } else {
+        false
+    }
+}
+
 pub(super) fn handle_global_shortcuts(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
@@ -513,35 +528,19 @@ pub(super) fn handle_global_shortcuts(
     }
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
         if ui.input(|i| i.modifiers.shift) {
-            if history.redo(document) {
-                canvas.image_textures.clear();
-                *status_message = "Redo".to_owned();
-                document_changed = true;
-            }
+            document_changed |= redo(document, canvas, status_message, history);
         } else if history.undo(document) {
             canvas.image_textures.clear();
             *status_message = "Undo".to_owned();
             document_changed = true;
         }
     }
-    let shift_redo_pressed = ui.input_mut(|input| {
-        input.consume_key(
-            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-            egui::Key::Z,
-        )
+    let redo_shortcut = ui.input_mut(|input| {
+        input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z)
+            || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
     });
-    if shift_redo_pressed && history.redo(document) {
-        canvas.image_textures.clear();
-        *status_message = "Redo".to_owned();
-        document_changed = true;
-    }
-    // Ctrl+Y as an alternative redo shortcut
-    let redo_pressed =
-        ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y));
-    if redo_pressed && history.redo(document) {
-        canvas.image_textures.clear();
-        *status_message = "Redo".to_owned();
-        document_changed = true;
+    if redo_shortcut {
+        document_changed |= redo(document, canvas, status_message, history);
     }
 
     document_changed
