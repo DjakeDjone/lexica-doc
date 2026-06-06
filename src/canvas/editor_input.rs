@@ -228,7 +228,9 @@ pub(super) fn handle_keyboard_input(
                     Key::Tab => {
                         let now = ui.input(|i| i.time);
                         history.checkpoint(document, now);
-                        if canvas.active_table_cell.is_some() {
+                        if let Some(completion) = canvas.ai_completion.take() {
+                            replace_selection_or_insert(document, canvas, &completion);
+                        } else if canvas.active_table_cell.is_some() {
                             move_active_table_cell(document, canvas, !modifiers.shift);
                         } else {
                             replace_selection_or_insert(document, canvas, "    ");

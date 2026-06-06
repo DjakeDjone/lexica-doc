@@ -4,3 +4,5 @@ pub mod document;
 pub mod grammar;
 pub mod layout;
 pub mod ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ai;

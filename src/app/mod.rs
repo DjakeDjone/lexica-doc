@@ -41,7 +41,7 @@ use chrome::{paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar, Rib
 pub use history::ChangeHistory;
 use palette::{configure_theme, theme_palette};
 use recent_files::{load_recent_files, remember_recent_file};
-use settings::{load_settings, save_settings, AppSettings};
+use settings::{load_settings, save_settings, AppSettings, OllamaSettings};
 
 pub use palette::ThemeMode;
 
@@ -84,6 +84,14 @@ pub struct WorsApp {
     grammar_download_rx: Option<mpsc::UnboundedReceiver<GrammarDownloadResult>>,
     grammar_auto_check: bool,
     tracked_path: Option<PathBuf>,
+    last_cursor_index: usize,
+    pub(crate) ai_config: OllamaSettings,
+    #[cfg(not(target_arch = "wasm32"))]
+    ai_tx: Option<mpsc::Sender<crate::ai::task::AiRequest>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    ai_rx: Option<mpsc::Receiver<crate::ai::task::AiTaskResult>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    _ai_runtime: Option<Runtime>,
 }
 
 const LOGO_BYTES: &[u8] = include_bytes!("../../assets/logo.png");
@@ -97,8 +105,9 @@ impl WorsApp {
 
         let mut theme_mode = ThemeMode::Light;
         let mut canvas = CanvasState::default();
+        let mut ai_config = OllamaSettings::default();
         if let Some(settings) = load_settings(cc.storage) {
-            settings.apply(&mut theme_mode, &mut canvas);
+            settings.apply(&mut theme_mode, &mut canvas, &mut ai_config);
         }
         configure_theme(&cc.egui_ctx, theme_mode, theme_palette(theme_mode));
 
@@ -134,6 +143,19 @@ impl WorsApp {
                 grammar_status =
                     GrammarStatus::Unavailable(format!("Failed to start grammar runtime: {error}"));
                 None
+            }
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let (ai_tx, ai_rx, _ai_runtime) = {
+            let rt = RuntimeBuilder::new_multi_thread().enable_all().build().ok();
+            if let Some(rt) = rt {
+                let (tx, rx) = tokio::sync::mpsc::channel(8);
+                let (res_tx, res_rx) = tokio::sync::mpsc::channel(8);
+                rt.spawn(crate::ai::task::run_ai_task(rx, res_tx));
+                (Some(tx), Some(res_rx), Some(rt))
+            } else {
+                (None, None, None)
             }
         };
 
@@ -178,6 +200,14 @@ impl WorsApp {
             grammar_download_rx: None,
             grammar_auto_check: true,
             tracked_path: None,
+            last_cursor_index: 0,
+            ai_config,
+            #[cfg(not(target_arch = "wasm32"))]
+            ai_tx,
+            #[cfg(not(target_arch = "wasm32"))]
+            ai_rx,
+            #[cfg(not(target_arch = "wasm32"))]
+            _ai_runtime,
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -204,6 +234,31 @@ impl WorsApp {
 
     fn remember_recent_file(&mut self, path: PathBuf) {
         remember_recent_file(&mut self.recent_files, path);
+    }
+
+    fn poll_ai_results(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(rx) = &mut self.ai_rx {
+            while let Ok(result) = rx.try_recv() {
+                match result {
+                    crate::ai::task::AiTaskResult::Started => {
+                        self.canvas.ai_working = true;
+                    }
+                    crate::ai::task::AiTaskResult::Completed(text) => {
+                        self.canvas.ai_working = false;
+                        if !text.is_empty() {
+                            self.canvas.ai_completion = Some(text);
+                        } else {
+                            self.canvas.ai_completion = None;
+                        }
+                    }
+                    crate::ai::task::AiTaskResult::Unavailable(err) => {
+                        self.canvas.ai_working = false;
+                        self.status_message = format!("AI Error: {}", err);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -320,14 +375,15 @@ impl App for WorsApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         save_settings(
             storage,
-            AppSettings::from_state(self.theme_mode, &self.canvas),
+            AppSettings::from_state(self.theme_mode, &self.canvas, self.ai_config.clone()),
         );
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut Frame) {
         self.poll_grammar_results();
         self.poll_grammar_download();
-        let initial_settings = AppSettings::from_state(self.theme_mode, &self.canvas);
+        self.poll_ai_results();
+        let initial_settings = AppSettings::from_state(self.theme_mode, &self.canvas, self.ai_config.clone());
 
         let shortcut_changed = handle_global_shortcuts(
             ui,
@@ -401,6 +457,7 @@ impl App for WorsApp {
                         &self.document,
                         &self.current_path,
                         &self.recent_files,
+                        &mut self.ai_config,
                         palette,
                     );
                 });
@@ -522,6 +579,30 @@ impl App for WorsApp {
         if shortcut_changed || canvas_output.text_changed {
             self.request_grammar_check(false);
         }
+            
+        let current_cursor = self.canvas.selection.primary.index;
+        if canvas_output.text_changed || self.last_cursor_index != current_cursor {
+            self.last_cursor_index = current_cursor;
+            self.canvas.ai_completion = None;
+            self.canvas.ai_working = false;
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.ai_config.enable {
+                if let Some(tx) = &self.ai_tx {
+                    let cursor_idx = self.canvas.selection.primary.index;
+                    let text = self.document.plain_text();
+                    let text_before = text.chars().take(cursor_idx).collect::<String>();
+                    let text_before_cursor = text_before.chars().rev().take(1000).collect::<Vec<_>>().into_iter().rev().collect();
+                    let text_after_cursor = text.chars().skip(cursor_idx).take(1000).collect::<String>();
+                    
+                    let _ = tx.try_send(crate::ai::task::AiRequest {
+                        text_before_cursor,
+                        text_after_cursor,
+                        endpoint: self.ai_config.endpoint.clone(),
+                        model: self.ai_config.model.clone(),
+                    });
+                }
+            }
+        }
 
         if self.current_path != self.tracked_path {
             self.tracked_path = self.current_path.clone();
@@ -608,7 +689,7 @@ impl App for WorsApp {
             }
         }
 
-        let current_settings = AppSettings::from_state(self.theme_mode, &self.canvas);
+        let current_settings = AppSettings::from_state(self.theme_mode, &self.canvas, self.ai_config.clone());
         if current_settings != initial_settings {
             if let Some(storage) = frame.storage_mut() {
                 save_settings(storage, current_settings);

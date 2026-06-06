@@ -486,6 +486,75 @@ pub fn paint_document_canvas(
                 caret_rect,
                 ui.input(|i| i.time) - canvas.last_interaction_time,
             );
+            
+            if canvas.ai_working {
+                let spinner_rect = egui::Rect::from_min_size(
+                    caret_rect.max + egui::vec2(4.0, -caret_rect.height() * 0.8),
+                    egui::vec2(caret_rect.height() * 0.8, caret_rect.height() * 0.8),
+                );
+                ui.put(
+                    spinner_rect,
+                    egui::Spinner::new()
+                        .size(caret_rect.height() * 0.8)
+                        .color(palette.page_border),
+                );
+            } else if let Some(completion) = &canvas.ai_completion {
+                let ghost_color = egui::Color32::GRAY.gamma_multiply(0.8);
+                let font_id = FontId::new(
+                    canvas.active_style.font_size_points * canvas.zoom,
+                    crate::document::text_font_family(canvas.active_style),
+                );
+
+                let mut page_right = viewport.right();
+                let mut page_left = viewport.left();
+                for page in &page_layout.pages {
+                    if page.page_rect.top() <= caret_rect.center().y && caret_rect.center().y <= page.page_rect.bottom() {
+                        page_right = page.content_rect.right();
+                        page_left = page.content_rect.left();
+                        break;
+                    }
+                }
+
+                let mut current_pos = caret_rect.min;
+                let line_height = caret_rect.height();
+                let space_galley = painter.layout_no_wrap(" ".to_owned(), font_id.clone(), ghost_color);
+                let space_width = space_galley.size().x;
+
+                let mut current_word = String::new();
+
+                let mut draw_word = |word: &str, pos: &mut egui::Pos2| {
+                    if word.is_empty() { return; }
+                    let galley = painter.layout_no_wrap(word.to_owned(), font_id.clone(), ghost_color);
+                    let size = galley.size();
+                    if pos.x + size.x > page_right && pos.x > page_left + 1.0 {
+                        pos.x = page_left;
+                        pos.y += line_height;
+                    }
+                    painter.galley(*pos, galley, ghost_color);
+                    pos.x += size.x;
+                };
+
+                for c in completion.chars() {
+                    if c == ' ' {
+                        draw_word(&current_word, &mut current_pos);
+                        current_word.clear();
+                        if current_pos.x + space_width > page_right {
+                            current_pos.x = page_left;
+                            current_pos.y += line_height;
+                        } else {
+                            current_pos.x += space_width;
+                        }
+                    } else if c == '\n' {
+                        draw_word(&current_word, &mut current_pos);
+                        current_word.clear();
+                        current_pos.x = page_left;
+                        current_pos.y += line_height;
+                    } else {
+                        current_word.push(c);
+                    }
+                }
+                draw_word(&current_word, &mut current_pos);
+            }
         }
     }
 

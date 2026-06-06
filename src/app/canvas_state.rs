@@ -95,6 +95,8 @@ pub struct CanvasState {
     pub active_header_footer: Option<ActiveHeaderFooter>,
     pub active_header_footer_cursor: usize,
     pub active_header_footer_selection: egui::text_selection::CCursorRange,
+    pub ai_completion: Option<String>,
+    pub ai_working: bool,
 }
 
 impl Default for CanvasState {
@@ -122,6 +124,8 @@ impl Default for CanvasState {
             active_header_footer: None,
             active_header_footer_cursor: 0,
             active_header_footer_selection: egui::text_selection::CCursorRange::default(),
+            ai_completion: None,
+            ai_working: false,
         }
     }
 }

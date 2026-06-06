@@ -1,5 +1,6 @@
 pub mod recent;
 pub mod save_open;
+pub mod settings_ui;
 
 use std::path::{Path, PathBuf};
 use eframe::egui;
@@ -12,16 +13,18 @@ pub enum BackstageSection {
     Open,
     Save,
     SaveAs,
+    Settings,
 }
 
 impl BackstageSection {
-    const ALL: [Self; 3] = [Self::Open, Self::Save, Self::SaveAs];
+    const ALL: [Self; 4] = [Self::Open, Self::Save, Self::SaveAs, Self::Settings];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Open => "Open",
             Self::Save => "Save",
             Self::SaveAs => "Save As",
+            Self::Settings => "Settings",
         }
     }
 }
@@ -157,6 +160,7 @@ pub fn paint_backstage(
     document: &DocumentState,
     current_path: &Option<PathBuf>,
     recent_files: &[PathBuf],
+    ollama_settings: &mut super::settings::OllamaSettings,
     palette: ThemePalette,
 ) -> BackstageOutput {
     let mut output = BackstageOutput::default();
@@ -183,22 +187,33 @@ pub fn paint_backstage(
     ui.scope_builder(egui::UiBuilder::new().max_rect(nav_rect), |ui| {
         paint_backstage_nav(ui, state, &mut output, nav_width, height, palette);
     });
-    ui.scope_builder(egui::UiBuilder::new().max_rect(locations_rect), |ui| {
-        save_open::paint_backstage_locations(ui, state, &mut output, location_width, height, palette);
-    });
-    ui.scope_builder(egui::UiBuilder::new().max_rect(details_rect), |ui| {
-        paint_backstage_details(
-            ui,
-            state,
-            document,
-            current_path,
-            recent_files,
-            &mut output,
-            detail_width,
-            height,
-            palette,
+
+    if state.section == BackstageSection::Settings {
+        let settings_rect = egui::Rect::from_min_size(
+            egui::pos2(nav_rect.right(), full_rect.top()),
+            egui::vec2(width - nav_width, height),
         );
-    });
+        ui.scope_builder(egui::UiBuilder::new().max_rect(settings_rect), |ui| {
+            settings_ui::paint_settings(ui, ollama_settings, width - nav_width, height, palette);
+        });
+    } else {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(locations_rect), |ui| {
+            save_open::paint_backstage_locations(ui, state, &mut output, location_width, height, palette);
+        });
+        ui.scope_builder(egui::UiBuilder::new().max_rect(details_rect), |ui| {
+            paint_backstage_details(
+                ui,
+                state,
+                document,
+                current_path,
+                recent_files,
+                &mut output,
+                detail_width,
+                height,
+                palette,
+            );
+        });
+    }
 
     ui.advance_cursor_after_rect(full_rect);
 
@@ -247,6 +262,9 @@ fn paint_backstage_nav(
                             }
                             BackstageSection::SaveAs => {
                                 state.section = BackstageSection::SaveAs;
+                            }
+                            BackstageSection::Settings => {
+                                state.section = BackstageSection::Settings;
                             }
                         }
                     }
