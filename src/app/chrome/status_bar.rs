@@ -4,6 +4,7 @@ use crate::app::{palette::ThemePalette, CanvasState};
 use crate::document::{DocumentState, OBJECT_REPLACEMENT_CHAR};
 use crate::grammar::GrammarStatus;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_status_bar(
     ui: &mut egui::Ui,
     document: &DocumentState,

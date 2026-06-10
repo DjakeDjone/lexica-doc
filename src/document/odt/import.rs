@@ -274,6 +274,7 @@ fn parse_content_xml(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_paragraph(
     runs: &mut Vec<TextRun>,
     paragraph_styles: &mut Vec<ParagraphStyle>,

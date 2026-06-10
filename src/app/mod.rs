@@ -103,6 +103,8 @@ pub struct WorsApp {
     dialog_tx: std::sync::mpsc::Sender<DialogAction>,
     #[cfg(not(target_arch = "wasm32"))]
     dialog_rx: std::sync::mpsc::Receiver<DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))]
+    api_rx: Option<tokio::sync::mpsc::Receiver<crate::http_server::ApiRequest>>,
 }
 
 const LOGO_BYTES: &[u8] = include_bytes!("../../assets/logo.png");
@@ -184,6 +186,21 @@ impl WorsApp {
         #[cfg(not(target_arch = "wasm32"))]
         let (dialog_tx, dialog_rx) = std::sync::mpsc::channel();
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut api_rx = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(rt) = &_ai_runtime {
+                let (tx, rx) = tokio::sync::mpsc::channel(32);
+                rt.spawn(async move {
+                    if let Err(e) = crate::http_server::start_server(tx).await {
+                        eprintln!("Failed to start API server: {}", e);
+                    }
+                });
+                api_rx = Some(rx);
+            }
+        }
+
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut app = Self {
             document: DocumentState::bootstrap(),
@@ -226,6 +243,8 @@ impl WorsApp {
             dialog_tx,
             #[cfg(not(target_arch = "wasm32"))]
             dialog_rx,
+            #[cfg(not(target_arch = "wasm32"))]
+            api_rx,
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -278,7 +297,24 @@ impl WorsApp {
             }
         }
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_api_requests(&mut self) {
+        if let Some(rx) = &mut self.api_rx {
+            while let Ok(request) = rx.try_recv() {
+                crate::http_server::handle_api_request(
+                    request,
+                    &mut self.document,
+                    &mut self.canvas,
+                    &mut self.history,
+                    &mut self.status_message,
+                    &self.current_path,
+                );
+            }
+        }
+    }
 }
+
 
 fn configure_docx_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -400,6 +436,8 @@ impl App for WorsApp {
         self.poll_grammar_results();
         self.poll_grammar_download();
         self.poll_ai_results();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_api_requests();
 
         #[cfg(not(target_arch = "wasm32"))]
         if let Ok(action) = self.dialog_rx.try_recv() {

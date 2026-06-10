@@ -26,6 +26,7 @@ pub(crate) struct HeaderSegment {
     pub(crate) end: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_page_header_footer(
     painter: &egui::Painter,
     document: &DocumentState,

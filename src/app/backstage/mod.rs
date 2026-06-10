@@ -293,6 +293,7 @@ fn paint_backstage_nav(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_backstage_details(
     ui: &mut egui::Ui,
     state: &mut BackstageState,
@@ -497,17 +498,7 @@ fn centered_nav_hint(ui: &mut egui::Ui, width: f32, text: &str, color: egui::Col
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::SaveFormat;
 
-    #[test]
-    fn save_format_supports_docx_extension() {
-        assert_eq!(SaveFormat::from_extension("docx"), Some(SaveFormat::Docx));
-        assert_eq!(SaveFormat::Docx.extension(), "docx");
-        assert_eq!(SaveFormat::Docx.label(), "Word Document (*.docx)");
-    }
-}
 
 pub(super) fn backstage_two_line_row(
     ui: &mut egui::Ui,
@@ -607,5 +598,17 @@ fn backstage_nav_surface(palette: ThemePalette) -> egui::Color32 {
         palette.title_bg
     } else {
         palette.tab_bg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SaveFormat;
+
+    #[test]
+    fn save_format_supports_docx_extension() {
+        assert_eq!(SaveFormat::from_extension("docx"), Some(SaveFormat::Docx));
+        assert_eq!(SaveFormat::Docx.extension(), "docx");
+        assert_eq!(SaveFormat::Docx.label(), "Word Document (*.docx)");
     }
 }

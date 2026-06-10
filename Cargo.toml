@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    ".",
+    "editor-mcp-server"
+]
+
 [package]
 name = "wors"
 version = "0.1.0"
@@ -21,6 +27,9 @@ zip = { version = "8.4.0", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rfd = "0.17.2"
 tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+dirs = "5.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"

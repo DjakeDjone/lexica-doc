@@ -13,7 +13,7 @@ use super::{
 use crate::document::{DocumentState, HeaderFooterKind, ListKind, OBJECT_REPLACEMENT_CHAR};
 
 impl DocumentState {
-    pub(crate) fn to_pdf_bytes(&self) -> Result<Vec<u8>, String> {
+    pub fn to_pdf_bytes(&self) -> Result<Vec<u8>, String> {
         let html = self.to_pdf_html();
         eprintln!("PDF EXPORT MARGINS: {:?}", self.margins);
         let options = GeneratePdfOptions {
@@ -76,11 +76,11 @@ impl DocumentState {
                 line_spacing_css_pdf(paragraph.style.line_spacing),
                 points_to_css_px(padding_left)
             );
-            let _ = write!(custom_css, ".p-{} {{ {} }}\n", i, p_css);
+            let _ = writeln!(custom_css, ".p-{} {{ {} }}", i, p_css);
 
             for (j, run) in paragraph.runs.iter().enumerate() {
                 let s_css = run_style_css_pdf(run.style);
-                let _ = write!(custom_css, ".s-{}-{} {{ {} }}\n", i, j, s_css);
+                let _ = writeln!(custom_css, ".s-{}-{} {{ {} }}", i, j, s_css);
             }
 
             if let Some(image) = paragraph.image.as_ref() {
@@ -91,7 +91,7 @@ impl DocumentState {
                     image.opacity.clamp(0.0, 1.0),
                     image_position_css_pdf(image)
                 );
-                let _ = write!(custom_css, ".img-{} {{ {} }}\n", i, img_css);
+                let _ = writeln!(custom_css, ".img-{} {{ {} }}", i, img_css);
             }
         }
 

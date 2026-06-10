@@ -160,7 +160,7 @@ impl DocumentState {
         };
         if section.different_first_page && page_index_within_section == 0 {
             HeaderFooterVariant::First
-        } else if self.different_odd_even_pages && (page_index_within_section + 1) % 2 == 0 {
+        } else if self.different_odd_even_pages && (page_index_within_section + 1).is_multiple_of(2) {
             HeaderFooterVariant::Even
         } else {
             HeaderFooterVariant::Default
@@ -325,7 +325,7 @@ impl DocumentState {
     pub fn header_template_for_page(&self, page_number: usize) -> &str {
         if self.different_first_page && page_number == 1 {
             &self.first_page_header_text
-        } else if self.different_odd_even_pages && page_number % 2 == 0 {
+        } else if self.different_odd_even_pages && page_number.is_multiple_of(2) {
             &self.even_page_header_text
         } else {
             &self.header_text
@@ -335,7 +335,7 @@ impl DocumentState {
     pub fn header_runs_for_page(&self, page_number: usize) -> &[TextRun] {
         if self.different_first_page && page_number == 1 {
             &self.first_page_header_runs
-        } else if self.different_odd_even_pages && page_number % 2 == 0 {
+        } else if self.different_odd_even_pages && page_number.is_multiple_of(2) {
             &self.even_page_header_runs
         } else {
             &self.header_runs
@@ -345,7 +345,7 @@ impl DocumentState {
     pub fn footer_template_for_page(&self, page_number: usize) -> &str {
         if self.different_first_page && page_number == 1 {
             &self.first_page_footer_text
-        } else if self.different_odd_even_pages && page_number % 2 == 0 {
+        } else if self.different_odd_even_pages && page_number.is_multiple_of(2) {
             &self.even_page_footer_text
         } else {
             &self.footer_text
@@ -355,7 +355,7 @@ impl DocumentState {
     pub fn footer_runs_for_page(&self, page_number: usize) -> &[TextRun] {
         if self.different_first_page && page_number == 1 {
             &self.first_page_footer_runs
-        } else if self.different_odd_even_pages && page_number % 2 == 0 {
+        } else if self.different_odd_even_pages && page_number.is_multiple_of(2) {
             &self.even_page_footer_runs
         } else {
             &self.footer_runs

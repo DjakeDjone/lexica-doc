@@ -9,6 +9,7 @@ use crate::app::{
 };
 use crate::document::{DocumentState, ParagraphAlignment};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn ribbon_file_group(
     ui: &mut egui::Ui,
     document: &mut DocumentState,
