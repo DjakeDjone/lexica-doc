@@ -462,6 +462,16 @@ impl App for WorsApp {
             &self.dialog_tx,
         );
 
+        if ui.input_mut(|input| {
+            input.consume_key(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::O,
+            )
+        }) {
+            self.ai_config.enable = !self.ai_config.enable;
+            self.status_message = format!("AI completions {}", if self.ai_config.enable { "enabled" } else { "disabled" });
+        }
+
         let palette = theme_palette(self.theme_mode);
         let status_line = self.status_message.clone();
         #[cfg(not(target_arch = "wasm32"))]
@@ -738,6 +748,7 @@ impl App for WorsApp {
                     &self.status_message,
                     &self.grammar_status,
                     self.grammar_errors.len(),
+                    &mut self.ai_config,
                     palette,
                 );
             });

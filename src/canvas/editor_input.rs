@@ -48,7 +48,18 @@ pub(super) fn handle_pointer_interaction(
         let Some(local_pos) = page_layout.document_pos(pointer_pos) else {
             return;
         };
-        let cursor = galley.cursor_from_pos(local_pos);
+        let mut cursor = galley.cursor_from_pos(local_pos);
+
+        if let Some(completion) = &canvas.ai_completion {
+            let primary_idx = canvas.selection.primary.index;
+            if cursor.index > primary_idx {
+                cursor.index = cursor.index.saturating_sub(completion.chars().count()).max(primary_idx);
+            }
+        }
+
+        if response.clicked() || response.drag_started() || response.double_clicked() || response.triple_clicked() {
+            canvas.ai_completion = None;
+        }
 
         let handled_multi_click = if response.triple_clicked() {
             canvas.selection =
@@ -124,9 +135,15 @@ pub(super) fn handle_keyboard_input(
     let events = ui.input(|i| i.events.clone());
     let mut changed = false;
 
+    let ghost_start_idx = canvas.selection.primary.index;
+    let mut ghost_len = 0;
+
     for event in events {
         match event {
             Event::Text(text) if !text.is_empty() => {
+                if let Some(completion) = canvas.ai_completion.take() {
+                    ghost_len = completion.chars().count();
+                }
                 let now = ui.input(|i| i.time);
                 history.checkpoint_coalesced(document, now);
                 if canvas.active_table_cell.is_some() {
@@ -137,6 +154,9 @@ pub(super) fn handle_keyboard_input(
                 changed = true;
             }
             Event::Paste(text) => {
+                if let Some(completion) = canvas.ai_completion.take() {
+                    ghost_len = completion.chars().count();
+                }
                 let now = ui.input(|i| i.time);
                 history.checkpoint(document, now);
                 if canvas.active_table_cell.is_some() {
@@ -157,6 +177,10 @@ pub(super) fn handle_keyboard_input(
                 }
             }
             Event::Cut => {
+                if let Some(completion) = canvas.ai_completion.take() {
+                    ghost_len = completion.chars().count();
+                    changed = true;
+                }
                 if canvas.active_table_cell.is_some() {
                     if copy_active_table_cell_selection(ui, document, canvas) {
                         let now = ui.input(|i| i.time);
@@ -181,6 +205,21 @@ pub(super) fn handle_keyboard_input(
                 modifiers,
                 ..
             } => {
+                if key == Key::Escape {
+                    if let Some(completion) = canvas.ai_completion.take() {
+                        ghost_len = completion.chars().count();
+                        changed = true;
+                    }
+                    continue;
+                }
+
+                if key != Key::Tab {
+                    if let Some(completion) = canvas.ai_completion.take() {
+                        ghost_len = completion.chars().count();
+                        changed = true;
+                    }
+                }
+
                 if handle_shortcut_key(document, canvas, key, modifiers, history, ui) {
                     changed = true;
                     continue;
@@ -260,6 +299,20 @@ pub(super) fn handle_keyboard_input(
             }
             _ => {}
         }
+    }
+
+    if ghost_len > 0 {
+        let adjust = |idx: &mut usize| {
+            if *idx > ghost_start_idx {
+                *idx = idx.saturating_sub(ghost_len).max(ghost_start_idx);
+            }
+        };
+        adjust(&mut canvas.selection.primary.index);
+        adjust(&mut canvas.selection.secondary.index);
+        
+        let total_chars = document.total_chars();
+        canvas.selection.primary.index = canvas.selection.primary.index.min(total_chars);
+        canvas.selection.secondary.index = canvas.selection.secondary.index.min(total_chars);
     }
 
     if changed {

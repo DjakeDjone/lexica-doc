@@ -80,6 +80,7 @@ pub fn insert_image(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (document, canvas, status_message, history);
         let tx = dialog_tx.clone();
         std::thread::spawn(move || {
             if let Some(path) = FileDialog::new()

@@ -100,16 +100,55 @@ pub fn layout_document(
             .iter()
             .any(|run| run.text.chars().any(|ch| ch != OBJECT_REPLACEMENT_CHAR));
 
+        let cursor_index = canvas.selection.primary.index;
+        let ai_completion = canvas.ai_completion.as_deref();
+
         if paragraph.runs.is_empty() {
-            job.append("", 0.0, text_format(default_style, canvas.zoom));
+            if let Some(completion) = ai_completion.filter(|_| paragraph.range.start == cursor_index) {
+                let ghost_style = CharacterStyle {
+                    text_color: egui::Color32::GRAY.gamma_multiply(0.8),
+                    highlight_color: Color32::TRANSPARENT,
+                    ..default_style
+                };
+                job.append(completion, 0.0, text_format(ghost_style, canvas.zoom));
+            } else {
+                job.append("", 0.0, text_format(default_style, canvas.zoom));
+            }
         } else {
+            let mut current_char_index = paragraph.range.start;
             for run in &paragraph.runs {
-                append_run_with_placeholders(
-                    &mut job,
-                    run,
-                    canvas.zoom,
-                    paragraph.image.is_some() && !has_visible_text,
-                );
+                let run_len = run.text.chars().count();
+                if let Some(completion) = ai_completion {
+                    if current_char_index <= cursor_index && cursor_index <= current_char_index + run_len {
+                        let split_idx = cursor_index - current_char_index;
+                        let before_text: String = run.text.chars().take(split_idx).collect();
+                        let after_text: String = run.text.chars().skip(split_idx).collect();
+
+                        if !before_text.is_empty() {
+                            let mut before_run = run.clone();
+                            before_run.text = before_text;
+                            append_run_with_placeholders(&mut job, &before_run, canvas.zoom, paragraph.image.is_some() && !has_visible_text);
+                        }
+
+                        let ghost_style = CharacterStyle {
+                            text_color: egui::Color32::GRAY.gamma_multiply(0.8),
+                            highlight_color: Color32::TRANSPARENT,
+                            ..run.style
+                        };
+                        job.append(completion, 0.0, text_format(ghost_style, canvas.zoom));
+
+                        if !after_text.is_empty() {
+                            let mut after_run = run.clone();
+                            after_run.text = after_text;
+                            append_run_with_placeholders(&mut job, &after_run, canvas.zoom, paragraph.image.is_some() && !has_visible_text);
+                        }
+                    } else {
+                        append_run_with_placeholders(&mut job, run, canvas.zoom, paragraph.image.is_some() && !has_visible_text);
+                    }
+                } else {
+                    append_run_with_placeholders(&mut job, run, canvas.zoom, paragraph.image.is_some() && !has_visible_text);
+                }
+                current_char_index += run_len;
             }
         }
 

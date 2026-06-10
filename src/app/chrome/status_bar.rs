@@ -11,6 +11,7 @@ pub(crate) fn paint_status_bar(
     status_message: &str,
     grammar_status: &GrammarStatus,
     grammar_issue_count: usize,
+    ai_config: &mut crate::app::settings::OllamaSettings,
     palette: ThemePalette,
 ) {
     ui.horizontal(|ui| {
@@ -99,6 +100,13 @@ pub(crate) fn paint_status_bar(
                 .size(11.0)
                 .color(palette.text_muted),
             );
+            ui.separator();
+            let ai_label = if ai_config.enable { "AI On" } else { "AI Off" };
+            if ui.selectable_label(ai_config.enable, 
+                egui::RichText::new(ai_label).size(11.0).color(palette.text_muted)
+            ).clicked() {
+                ai_config.enable = !ai_config.enable;
+            }
         });
     });
 }

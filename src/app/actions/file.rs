@@ -32,6 +32,7 @@ pub fn open_document(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (document, canvas, status_message, current_path, history);
         let tx = dialog_tx.clone();
         std::thread::spawn(move || {
             if let Some(path) = FileDialog::new()
@@ -162,6 +163,7 @@ pub fn save_document_as(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (status_message, current_path);
         let tx = dialog_tx.clone();
         let title = document.title.clone();
         std::thread::spawn(move || {
@@ -196,6 +198,7 @@ pub fn save_document_as_with_name(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let _ = (document, status_message, current_path);
         let tx = dialog_tx.clone();
         std::thread::spawn(move || {
             if let Some(path) = pick_save_path_with_file_name(&suggested_name) {
@@ -206,10 +209,6 @@ pub fn save_document_as_with_name(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn pick_save_path(document: &DocumentState) -> Option<PathBuf> {
-    pick_save_path_with_file_name(&document.title)
-}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn pick_save_path_with_file_name(file_name: &str) -> Option<PathBuf> {
