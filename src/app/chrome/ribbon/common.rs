@@ -15,16 +15,27 @@ pub(crate) fn ribbon_file_group(
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
     history: &mut ChangeHistory,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Clipboard", palette, |ui| {
         if ui.button("📂 Open").clicked() {
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = open_document(document, canvas, status_message, current_path, history, dialog_tx);
+            #[cfg(target_arch = "wasm32")]
             let _ = open_document(document, canvas, status_message, current_path, history);
         }
         if ui.button("💾 Save").clicked() {
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = save_document(document, status_message, current_path, dialog_tx);
+            #[cfg(target_arch = "wasm32")]
             let _ = save_document(document, status_message, current_path);
         }
         if ui.button("Save As").clicked() {
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = save_document_as(document, status_message, current_path, dialog_tx);
+            #[cfg(target_arch = "wasm32")]
             let _ = save_document_as(document, status_message, current_path);
         }
     });

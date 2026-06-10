@@ -2,11 +2,11 @@ pub mod recent;
 pub mod save_open;
 pub mod settings_ui;
 
-use std::path::{Path, PathBuf};
 use eframe::egui;
+use std::path::{Path, PathBuf};
 
-use crate::document::DocumentState;
 use super::palette::ThemePalette;
+use crate::document::DocumentState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackstageSection {
@@ -51,18 +51,27 @@ pub enum SaveFormat {
     Text,
     Markdown,
     Html,
+    Docx,
     Odt,
     Pdf,
 }
 
 impl SaveFormat {
-    const ALL: [Self; 5] = [Self::Text, Self::Markdown, Self::Html, Self::Odt, Self::Pdf];
+    const ALL: [Self; 6] = [
+        Self::Text,
+        Self::Markdown,
+        Self::Html,
+        Self::Docx,
+        Self::Odt,
+        Self::Pdf,
+    ];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Text => "Plain Text (*.txt)",
             Self::Markdown => "Markdown (*.md)",
             Self::Html => "Web Page (*.html)",
+            Self::Docx => "Word Document (*.docx)",
             Self::Odt => "OpenDocument Text (*.odt)",
             Self::Pdf => "PDF (*.pdf)",
         }
@@ -73,6 +82,7 @@ impl SaveFormat {
             Self::Text => "txt",
             Self::Markdown => "md",
             Self::Html => "html",
+            Self::Docx => "docx",
             Self::Odt => "odt",
             Self::Pdf => "pdf",
         }
@@ -87,6 +97,7 @@ impl SaveFormat {
             "txt" => Some(Self::Text),
             "md" | "markdown" => Some(Self::Markdown),
             "html" | "htm" => Some(Self::Html),
+            "docx" => Some(Self::Docx),
             "odt" => Some(Self::Odt),
             "pdf" => Some(Self::Pdf),
             _ => None,
@@ -198,7 +209,14 @@ pub fn paint_backstage(
         });
     } else {
         ui.scope_builder(egui::UiBuilder::new().max_rect(locations_rect), |ui| {
-            save_open::paint_backstage_locations(ui, state, &mut output, location_width, height, palette);
+            save_open::paint_backstage_locations(
+                ui,
+                state,
+                &mut output,
+                location_width,
+                height,
+                palette,
+            );
         });
         ui.scope_builder(egui::UiBuilder::new().max_rect(details_rect), |ui| {
             paint_backstage_details(
@@ -477,6 +495,18 @@ fn centered_nav_hint(ui: &mut egui::Ui, width: f32, text: &str, color: egui::Col
         egui::FontId::proportional(11.0),
         color,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SaveFormat;
+
+    #[test]
+    fn save_format_supports_docx_extension() {
+        assert_eq!(SaveFormat::from_extension("docx"), Some(SaveFormat::Docx));
+        assert_eq!(SaveFormat::Docx.extension(), "docx");
+        assert_eq!(SaveFormat::Docx.label(), "Word Document (*.docx)");
+    }
 }
 
 pub(super) fn backstage_two_line_row(

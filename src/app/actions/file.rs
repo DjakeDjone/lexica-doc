@@ -8,12 +8,11 @@ use rfd::FileDialog;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast as _, JsValue};
 
+
+use crate::app::{CanvasState, ChangeHistory};
 use crate::document::DocumentState;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::document::{CharacterStyle, ParagraphStyle};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::app::ZoomMode;
-use crate::app::{CanvasState, ChangeHistory};
 
 pub fn open_document(
     document: &mut DocumentState,
@@ -21,6 +20,8 @@ pub fn open_document(
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
     history: &mut ChangeHistory,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
 ) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -31,18 +32,16 @@ pub fn open_document(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let path = FileDialog::new()
-            .add_filter("supported", &["txt", "md", "markdown", "docx", "odt"])
-            .pick_file()?;
-        open_document_from_path(
-            document,
-            canvas,
-            status_message,
-            current_path,
-            history,
-            &path,
-        )
-        .then_some(path)
+        let tx = dialog_tx.clone();
+        std::thread::spawn(move || {
+            if let Some(path) = FileDialog::new()
+                .add_filter("supported", &["txt", "md", "markdown", "docx", "odt"])
+                .pick_file()
+            {
+                let _ = tx.send(crate::app::DialogAction::OpenDocument(path));
+            }
+        });
+        None
     }
 }
 
@@ -66,12 +65,6 @@ pub fn open_document_from_path(
             canvas.selection = egui::text_selection::CCursorRange::default();
             canvas.active_style = CharacterStyle::default();
             canvas.active_paragraph_style = ParagraphStyle::default();
-            canvas.zoom = 1.0;
-            canvas.zoom_mode = if imported_document {
-                ZoomMode::FitPage
-            } else {
-                ZoomMode::Manual
-            };
             canvas.imported_docx_view = imported_document;
             canvas.pan = egui::Vec2::ZERO;
             canvas.image_textures.clear();
@@ -85,10 +78,7 @@ pub fn open_document_from_path(
             canvas.table_cell_selection = egui::text_selection::CCursorRange::default();
             canvas.table_resize_handles.clear();
             canvas.table_resize_drag = None;
-            *current_path = match path.extension().and_then(|ext| ext.to_str()) {
-                Some("docx") => None,
-                _ => Some(path.to_path_buf()),
-            };
+            *current_path = Some(path.to_path_buf());
             *status_message = format!(
                 "Imported {}",
                 path.file_name()
@@ -108,6 +98,8 @@ pub fn save_document(
     document: &DocumentState,
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
 ) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -121,26 +113,32 @@ pub fn save_document(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let path = match current_path.clone() {
-            Some(path) => path,
-            None => pick_save_path(document)?,
-        };
-
-        match document.save_to_path(&path) {
-            Ok(()) => {
-                *current_path = Some(path.clone());
-                *status_message = format!(
-                    "Saved {}",
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("document")
-                );
-                Some(path)
+        if let Some(path) = current_path.clone() {
+            match document.save_to_path(&path) {
+                Ok(()) => {
+                    *current_path = Some(path.clone());
+                    *status_message = format!(
+                        "Saved {}",
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("document")
+                    );
+                    Some(path)
+                }
+                Err(error) => {
+                    *status_message = error;
+                    None
+                }
             }
-            Err(error) => {
-                *status_message = error;
-                None
-            }
+        } else {
+            let tx = dialog_tx.clone();
+            let title = document.title.clone();
+            std::thread::spawn(move || {
+                if let Some(path) = pick_save_path_with_file_name(&title) {
+                    let _ = tx.send(crate::app::DialogAction::SaveDocument(path));
+                }
+            });
+            None
         }
     }
 }
@@ -149,6 +147,8 @@ pub fn save_document_as(
     document: &DocumentState,
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
 ) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -162,24 +162,14 @@ pub fn save_document_as(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let path = pick_save_path(document)?;
-
-        match document.save_to_path(&path) {
-            Ok(()) => {
-                *current_path = Some(path.clone());
-                *status_message = format!(
-                    "Saved {}",
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("document")
-                );
-                Some(path)
+        let tx = dialog_tx.clone();
+        let title = document.title.clone();
+        std::thread::spawn(move || {
+            if let Some(path) = pick_save_path_with_file_name(&title) {
+                let _ = tx.send(crate::app::DialogAction::SaveDocument(path));
             }
-            Err(error) => {
-                *status_message = error;
-                None
-            }
-        }
+        });
+        None
     }
 }
 
@@ -189,6 +179,8 @@ pub fn save_document_as_with_name(
     current_path: &mut Option<PathBuf>,
     file_name: &str,
     extension: &str,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
 ) -> Option<PathBuf> {
     let suggested_name = suggested_save_name(file_name, extension);
 
@@ -204,24 +196,13 @@ pub fn save_document_as_with_name(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let path = pick_save_path_with_file_name(&suggested_name)?;
-
-        match document.save_to_path(&path) {
-            Ok(()) => {
-                *current_path = Some(path.clone());
-                *status_message = format!(
-                    "Saved {}",
-                    path.file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("document")
-                );
-                Some(path)
+        let tx = dialog_tx.clone();
+        std::thread::spawn(move || {
+            if let Some(path) = pick_save_path_with_file_name(&suggested_name) {
+                let _ = tx.send(crate::app::DialogAction::SaveDocument(path));
             }
-            Err(error) => {
-                *status_message = error;
-                None
-            }
-        }
+        });
+        None
     }
 }
 
@@ -236,6 +217,7 @@ fn pick_save_path_with_file_name(file_name: &str) -> Option<PathBuf> {
         .add_filter("text", &["txt"])
         .add_filter("markdown", &["md", "markdown"])
         .add_filter("web (formatted)", &["html", "htm"])
+        .add_filter("Word document", &["docx"])
         .add_filter("OpenDocument text", &["odt"])
         .add_filter("pdf", &["pdf"])
         .set_file_name(file_name)
@@ -301,6 +283,7 @@ fn mime_type_for_extension(extension: &str) -> &'static str {
         "txt" => "text/plain;charset=utf-8",
         "pdf" => "application/pdf",
         "html" | "htm" => "text/html;charset=utf-8",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "odt" => "application/vnd.oasis.opendocument.text",
         _ => "application/octet-stream",
     }

@@ -13,10 +13,15 @@ pub(crate) fn ribbon_insert_group(
     canvas: &mut CanvasState,
     status_message: &mut String,
     history: &mut ChangeHistory,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Insert", palette, |ui| {
         if ui.button("Image").clicked() {
+            #[cfg(not(target_arch = "wasm32"))]
+            insert_image(document, canvas, status_message, history, dialog_tx);
+            #[cfg(target_arch = "wasm32")]
             insert_image(document, canvas, status_message, history);
         }
         if ui.button("Page Break").clicked() {

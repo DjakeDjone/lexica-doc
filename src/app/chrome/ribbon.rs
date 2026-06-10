@@ -41,6 +41,8 @@ pub(crate) fn paint_ribbon(
     grammar_status: &GrammarStatus,
     grammar_auto_check: &mut bool,
     can_download_grammar: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
     palette: ThemePalette,
 ) -> GrammarRibbonOutput {
     sync_active_style(document, canvas);
@@ -51,6 +53,9 @@ pub(crate) fn paint_ribbon(
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| match active_tab {
                 RibbonTab::Home => {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    common::ribbon_file_group(ui, document, canvas, status_message, current_path, history, dialog_tx, palette);
+                    #[cfg(target_arch = "wasm32")]
                     common::ribbon_file_group(ui, document, canvas, status_message, current_path, history, palette);
                     home::ribbon_font_group(ui, document, canvas, history, palette);
                     home::ribbon_paragraph_group(ui, document, canvas, history, palette);
@@ -58,8 +63,16 @@ pub(crate) fn paint_ribbon(
                     home::ribbon_view_group(ui, canvas, status_message, theme_mode, palette);
                 }
                 RibbonTab::Insert => {
-                    common::ribbon_file_group(ui, document, canvas, status_message, current_path, history, palette);
-                    insert::ribbon_insert_group(ui, document, canvas, status_message, history, palette);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        common::ribbon_file_group(ui, document, canvas, status_message, current_path, history, dialog_tx, palette);
+                        insert::ribbon_insert_group(ui, document, canvas, status_message, history, dialog_tx, palette);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        common::ribbon_file_group(ui, document, canvas, status_message, current_path, history, palette);
+                        insert::ribbon_insert_group(ui, document, canvas, status_message, history, palette);
+                    }
                     common::ribbon_info_group(
                         ui,
                         "Insert",
@@ -133,6 +146,9 @@ pub(crate) fn paint_ribbon(
                 RibbonTab::Table => {
                     home::ribbon_font_group(ui, document, canvas, history, palette);
                     home::ribbon_color_group(ui, document, canvas, history, palette);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    insert::ribbon_insert_group(ui, document, canvas, status_message, history, dialog_tx, palette);
+                    #[cfg(target_arch = "wasm32")]
                     insert::ribbon_insert_group(ui, document, canvas, status_message, history, palette);
                     table::table_format_group(ui, document, canvas, status_message, history, palette);
                 }

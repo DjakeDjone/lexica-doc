@@ -48,10 +48,15 @@ pub fn handle_global_shortcuts(
     history: &mut ChangeHistory,
     current_path: &mut Option<PathBuf>,
     status_message: &mut String,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
 ) -> bool {
     let mut document_changed = false;
 
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = save_document(document, status_message, current_path, dialog_tx);
+        #[cfg(target_arch = "wasm32")]
         let _ = save_document(document, status_message, current_path);
     }
     if ui.input_mut(|input| {
@@ -60,6 +65,9 @@ pub fn handle_global_shortcuts(
             egui::Key::S,
         )
     }) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = save_document_as(document, status_message, current_path, dialog_tx);
+        #[cfg(target_arch = "wasm32")]
         let _ = save_document_as(document, status_message, current_path);
     }
     if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {

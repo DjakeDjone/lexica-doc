@@ -11,7 +11,7 @@ use std::{fmt::Write as _, fs, path::Path};
 use eframe::egui::Color32;
 
 use super::{
-    docx::docx_to_document,
+    docx::{document_to_docx, docx_to_document},
     markdown::markdown_to_runs,
     odt::{document_to_odt, odt_to_document},
     CharacterStyle, DocumentImage, DocumentState, FontChoice, ImageLayoutMode, LineSpacing,
@@ -137,9 +137,10 @@ impl DocumentState {
             "txt" | "" => Ok(self.to_plain_text_export().into_bytes()),
             "html" | "htm" => Ok(self.to_html().into_bytes()),
             "pdf" => self.to_pdf_bytes(),
+            "docx" => document_to_docx(self),
             "odt" => document_to_odt(self),
             other => Err(format!(
-                "saving .{other} is not supported yet; use .txt, .md, .html, .odt, or .pdf"
+                "saving .{other} is not supported yet; use .txt, .md, .html, .docx, .odt, or .pdf"
             )),
         }
     }

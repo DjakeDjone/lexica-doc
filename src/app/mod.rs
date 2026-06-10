@@ -55,6 +55,13 @@ use grammar::GrammarDownloadStatus;
 #[cfg(not(target_arch = "wasm32"))]
 use grammar::GrammarDownloadResult;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub enum DialogAction {
+    OpenDocument(PathBuf),
+    SaveDocument(PathBuf),
+    InsertImage(PathBuf),
+}
+
 pub struct WorsApp {
     document: DocumentState,
     canvas: CanvasState,
@@ -92,6 +99,10 @@ pub struct WorsApp {
     ai_rx: Option<mpsc::Receiver<crate::ai::task::AiTaskResult>>,
     #[cfg(not(target_arch = "wasm32"))]
     _ai_runtime: Option<Runtime>,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: std::sync::mpsc::Sender<DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_rx: std::sync::mpsc::Receiver<DialogAction>,
 }
 
 const LOGO_BYTES: &[u8] = include_bytes!("../../assets/logo.png");
@@ -170,6 +181,9 @@ impl WorsApp {
             show_grammar_warning = true;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let (dialog_tx, dialog_rx) = std::sync::mpsc::channel();
+
         #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
         let mut app = Self {
             document: DocumentState::bootstrap(),
@@ -208,6 +222,10 @@ impl WorsApp {
             ai_rx,
             #[cfg(not(target_arch = "wasm32"))]
             _ai_runtime,
+            #[cfg(not(target_arch = "wasm32"))]
+            dialog_tx,
+            #[cfg(not(target_arch = "wasm32"))]
+            dialog_rx,
         };
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -383,6 +401,54 @@ impl App for WorsApp {
         self.poll_grammar_results();
         self.poll_grammar_download();
         self.poll_ai_results();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(action) = self.dialog_rx.try_recv() {
+            match action {
+                DialogAction::OpenDocument(path) => {
+                    if crate::app::actions::open_document_from_path(
+                        &mut self.document,
+                        &mut self.canvas,
+                        &mut self.status_message,
+                        &mut self.current_path,
+                        &mut self.history,
+                        &path,
+                    ) {
+                        self.remember_recent_file(path);
+                        self.backstage.open_save_as(&self.document, &self.current_path);
+                        self.backstage.visible = false;
+                    }
+                }
+                DialogAction::SaveDocument(path) => {
+                    match self.document.save_to_path(&path) {
+                        Ok(()) => {
+                            self.current_path = Some(path.clone());
+                            self.status_message = format!(
+                                "Saved {}",
+                                path.file_name()
+                                    .and_then(|name| name.to_str())
+                                    .unwrap_or("document")
+                            );
+                            self.remember_recent_file(path);
+                            self.backstage.visible = false;
+                        }
+                        Err(error) => {
+                            self.status_message = error;
+                        }
+                    }
+                }
+                DialogAction::InsertImage(path) => {
+                    crate::app::actions::insert::finish_insert_image(
+                        &mut self.document,
+                        &mut self.canvas,
+                        &mut self.status_message,
+                        &mut self.history,
+                        &path,
+                    );
+                }
+            }
+        }
+
         let initial_settings = AppSettings::from_state(self.theme_mode, &self.canvas, self.ai_config.clone());
 
         let shortcut_changed = handle_global_shortcuts(
@@ -392,6 +458,8 @@ impl App for WorsApp {
             &mut self.history,
             &mut self.current_path,
             &mut self.status_message,
+            #[cfg(not(target_arch = "wasm32"))]
+            &self.dialog_tx,
         );
 
         let palette = theme_palette(self.theme_mode);
@@ -466,37 +534,57 @@ impl App for WorsApp {
                 self.backstage.visible = false;
             }
             if backstage_output.save_requested {
-                if let Some(path) = save_document(
+                #[cfg(not(target_arch = "wasm32"))]
+                save_document(
                     &self.document,
                     &mut self.status_message,
                     &mut self.current_path,
-                ) {
-                    self.remember_recent_file(path);
-                }
+                    &self.dialog_tx,
+                );
+                #[cfg(target_arch = "wasm32")]
+                save_document(
+                    &self.document,
+                    &mut self.status_message,
+                    &mut self.current_path,
+                );
             }
             if backstage_output.save_as_requested {
-                if let Some(path) = save_document_as_with_name(
+                #[cfg(not(target_arch = "wasm32"))]
+                save_document_as_with_name(
                     &self.document,
                     &mut self.status_message,
                     &mut self.current_path,
                     &self.backstage.file_name,
                     self.backstage.format.extension(),
-                ) {
-                    self.remember_recent_file(path);
-                }
+                    &self.dialog_tx,
+                );
+                #[cfg(target_arch = "wasm32")]
+                save_document_as_with_name(
+                    &self.document,
+                    &mut self.status_message,
+                    &mut self.current_path,
+                    &self.backstage.file_name,
+                    self.backstage.format.extension(),
+                );
             }
             if backstage_output.open_requested {
-                if let Some(path) = open_document(
+                #[cfg(not(target_arch = "wasm32"))]
+                open_document(
                     &mut self.document,
                     &mut self.canvas,
                     &mut self.status_message,
                     &mut self.current_path,
                     &mut self.history,
-                ) {
-                    self.remember_recent_file(path);
-                }
-                self.backstage
-                    .open_save_as(&self.document, &self.current_path);
+                    &self.dialog_tx,
+                );
+                #[cfg(target_arch = "wasm32")]
+                open_document(
+                    &mut self.document,
+                    &mut self.canvas,
+                    &mut self.status_message,
+                    &mut self.current_path,
+                    &mut self.history,
+                );
             }
             if let Some(path) = backstage_output.recent_open_requested {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -543,6 +631,8 @@ impl App for WorsApp {
                         &self.grammar_status,
                         &mut self.grammar_auto_check,
                         grammar_download_available,
+                        #[cfg(not(target_arch = "wasm32"))]
+                        &self.dialog_tx,
                         palette,
                     );
                 });

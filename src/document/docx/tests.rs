@@ -1,10 +1,20 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    io::{Cursor, Read},
+};
 
 use super::numbering::parse_numbering_xml;
 use super::styles::parse_styles_xml;
 use super::styles::parse_theme_xml;
-use super::{parse_document_relationships, parse_document_xml};
-use crate::document::{LineSpacingKind, ListKind, ParagraphAlignment, OBJECT_REPLACEMENT_CHAR};
+use super::{document_to_docx, parse_document_relationships, parse_document_xml};
+use crate::document::{
+    CharacterStyle, DistanceFromText, DocumentImage, DocumentState, DocumentTable,
+    HeaderFooterStory, ImageLayoutMode, ImageRendering, LineSpacing, LineSpacingKind, ListKind,
+    PageMargins, PageSetup, PageSize, ParagraphAlignment, ParagraphStyle, PositionAlign, Section,
+    TableCell, TextRun, VerticalPosition, VerticalRelativeTo, WrapMode, OBJECT_REPLACEMENT_CHAR,
+};
+use eframe::egui::Color32;
+use zip::ZipArchive;
 
 #[test]
 fn parses_lists_alignment_and_page_settings_from_docx_xml() {
@@ -440,4 +450,254 @@ fn parses_exact_and_at_least_line_spacing() {
         LineSpacingKind::AtLeastPoints
     );
     assert_eq!(imported.paragraph_styles[1].line_spacing.value, 18.0);
+}
+
+#[test]
+fn exports_docx_package_with_rich_word_parts() {
+    let bytes = document_to_docx(&rich_export_document()).expect("docx export");
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).expect("docx zip");
+
+    let content_types = zip_text(&mut archive, "[Content_Types].xml");
+    assert!(content_types.contains("wordprocessingml.document.main+xml"));
+    assert!(content_types.contains("wordprocessingml.header+xml"));
+    assert!(content_types.contains("wordprocessingml.footer+xml"));
+    assert!(content_types.contains("image/png"));
+
+    let rels = zip_text(&mut archive, "word/_rels/document.xml.rels");
+    assert!(rels.contains("/relationships/image"));
+    assert!(rels.contains("/relationships/header"));
+    assert!(rels.contains("/relationships/footer"));
+
+    assert!(archive.by_name("word/media/image-1.png").is_ok());
+    assert!(archive.by_name("word/header1.xml").is_ok());
+    assert!(archive.by_name("word/footer1.xml").is_ok());
+    assert!(archive.by_name("word/styles.xml").is_ok());
+    assert!(archive.by_name("word/numbering.xml").is_ok());
+    assert!(archive.by_name("word/settings.xml").is_ok());
+}
+
+#[test]
+fn exports_docx_document_xml_for_formatting_tables_images_and_sections() {
+    let bytes = document_to_docx(&rich_export_document()).expect("docx export");
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).expect("docx zip");
+    let document_xml = zip_text(&mut archive, "word/document.xml");
+
+    assert!(document_xml.contains("<w:b/>"));
+    assert!(document_xml.contains("<w:i/>"));
+    assert!(document_xml.contains(r#"<w:u w:val="single"/>"#));
+    assert!(document_xml.contains("<w:strike/>"));
+    assert!(document_xml.contains(r#"<w:sz w:val="32"/>"#));
+    assert!(document_xml.contains(r#"<w:color w:val="102030"/>"#));
+    assert!(document_xml.contains(r#"<w:highlight w:val="yellow"/>"#));
+    assert!(document_xml.contains(r#"<w:rFonts w:ascii="Liberation Serif""#));
+    assert!(document_xml.contains(r#"<w:jc w:val="center"/>"#));
+    assert!(document_xml
+        .contains(r#"<w:spacing w:before="120" w:after="160" w:line="360" w:lineRule="auto"/>"#));
+    assert!(document_xml.contains("<w:pageBreakBefore/>"));
+    assert!(document_xml.contains(r#"<w:numId w:val="1"/>"#));
+    assert!(document_xml.contains(r#"<w:numId w:val="2"/>"#));
+    assert!(document_xml.contains("<w:tbl>"));
+    assert!(document_xml.contains(r#"<w:gridCol w:w="1440"/>"#));
+    assert!(document_xml.contains(r#"<w:gridSpan w:val="2"/>"#));
+    assert!(document_xml.contains("<wp:inline"));
+    assert!(document_xml.contains("<wp:anchor"));
+    assert!(document_xml.contains("<wp:wrapSquare"));
+    assert!(document_xml.contains(r#"<w:pgSz w:w="12240" w:h="15840"/>"#));
+    assert!(document_xml
+        .contains(r#"<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800""#));
+    assert!(document_xml.contains("<w:titlePg/>"));
+    assert!(document_xml.contains(r#"<w:pgNumType w:start="3"/>"#));
+}
+
+#[test]
+fn exports_docx_numbering_headers_footers_and_save_bytes() {
+    let document = rich_export_document();
+    let bytes = document
+        .export_bytes_for_extension("docx")
+        .expect("docx bytes");
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).expect("docx zip");
+
+    let numbering_xml = zip_text(&mut archive, "word/numbering.xml");
+    assert!(numbering_xml.contains(r#"<w:num w:numId="1">"#));
+    assert!(numbering_xml.contains(r#"<w:num w:numId="2">"#));
+
+    let settings_xml = zip_text(&mut archive, "word/settings.xml");
+    assert!(settings_xml.contains("<w:evenAndOddHeaders/>"));
+
+    let header_xml = zip_text(&mut archive, "word/header1.xml");
+    assert!(header_xml.contains("<w:instrText"));
+    assert!(header_xml.contains(" PAGE "));
+    let footer_xml = zip_text(&mut archive, "word/footer1.xml");
+    assert!(footer_xml.contains(" NUMPAGES "));
+}
+
+#[test]
+fn saves_docx_extension_to_readable_zip() {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "wors-docx-export-{}.docx",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+
+    rich_export_document()
+        .save_to_path(&path)
+        .expect("docx save");
+    let bytes = std::fs::read(&path).expect("saved docx");
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).expect("saved docx zip");
+    assert!(archive.by_name("word/document.xml").is_ok());
+
+    let _ = std::fs::remove_file(path);
+}
+
+fn rich_export_document() -> DocumentState {
+    let inline_image = test_docx_image(1, ImageLayoutMode::Inline, WrapMode::Inline);
+    let mut floating_image = test_docx_image(2, ImageLayoutMode::Floating, WrapMode::Square);
+    floating_image.distance_from_text = DistanceFromText {
+        top_points: 2.0,
+        right_points: 4.0,
+        bottom_points: 3.0,
+        left_points: 5.0,
+    };
+    floating_image.vertical_position = VerticalPosition {
+        relative_to: VerticalRelativeTo::Paragraph,
+        align: Some(PositionAlign::Start),
+        offset_points: 12.0,
+    };
+    floating_image.set_manual_offset(18.0, 12.0);
+
+    let mut table = DocumentTable::new(1, 1, 2, 216.0);
+    table.col_widths_points = vec![72.0, 144.0];
+    table.rows[0][0] = TableCell {
+        runs: vec![TextRun {
+            text: "Table".to_owned(),
+            style: CharacterStyle {
+                bold: true,
+                ..CharacterStyle::default()
+            },
+        }],
+        images: Vec::new(),
+        col_span: 2,
+        row_span: 1,
+    };
+
+    let mut document = DocumentState::bootstrap();
+    document.title = "Word Export".to_owned();
+    document.runs = vec![
+        TextRun {
+            text: "Styled".to_owned(),
+            style: CharacterStyle {
+                bold: true,
+                italic: true,
+                underline: true,
+                strikethrough: true,
+                font_size_points: 16.0,
+                font_family_name: Some("docx-liberation-serif"),
+                text_color: Color32::from_rgb(0x10, 0x20, 0x30),
+                highlight_color: Color32::from_rgb(255, 242, 129),
+                ..CharacterStyle::default()
+            },
+        },
+        TextRun {
+            text: format!("\nBullet\nNumber\n{OBJECT_REPLACEMENT_CHAR}\n{OBJECT_REPLACEMENT_CHAR}\n{OBJECT_REPLACEMENT_CHAR}"),
+            style: CharacterStyle::default(),
+        },
+    ];
+    document.paragraph_styles = vec![
+        ParagraphStyle {
+            alignment: ParagraphAlignment::Center,
+            spacing_before_points: 6,
+            spacing_after_points: 8,
+            line_spacing: LineSpacing {
+                kind: LineSpacingKind::AutoMultiplier,
+                value: 1.5,
+            },
+            ..ParagraphStyle::default()
+        },
+        ParagraphStyle {
+            list_kind: ListKind::Bullet,
+            page_break_before: true,
+            ..ParagraphStyle::default()
+        },
+        ParagraphStyle {
+            list_kind: ListKind::Ordered,
+            ..ParagraphStyle::default()
+        },
+        ParagraphStyle::default(),
+        ParagraphStyle::default(),
+        ParagraphStyle::default(),
+    ];
+    document.paragraph_images = vec![
+        None,
+        None,
+        None,
+        Some(inline_image),
+        Some(floating_image),
+        None,
+    ];
+    document.paragraph_tables = vec![None, None, None, None, None, Some(table)];
+    document.page_size = PageSize {
+        width_points: 612.0,
+        height_points: 792.0,
+    };
+    document.margins = PageMargins {
+        top_points: 72.0,
+        right_points: 90.0,
+        bottom_points: 72.0,
+        left_points: 90.0,
+    };
+    document.different_odd_even_pages = true;
+    document.sections = vec![Section::first(PageSetup {
+        page_size: document.page_size,
+        margins: document.margins,
+        header_from_top_points: 36.0,
+        footer_from_bottom_points: 36.0,
+        page_number_start: Some(3),
+    })];
+    document.sections[0].different_first_page = true;
+    document.sections[0].header_footer.header_default.story =
+        HeaderFooterStory::from_runs(vec![TextRun {
+            text: "Page { PAGE }".to_owned(),
+            style: CharacterStyle::default(),
+        }]);
+    document.sections[0].header_footer.footer_default.story =
+        HeaderFooterStory::from_runs(vec![TextRun {
+            text: "Total { NUMPAGES }".to_owned(),
+            style: CharacterStyle::default(),
+        }]);
+    document.sync_compat_from_first_section();
+    document
+}
+
+fn test_docx_image(id: usize, layout_mode: ImageLayoutMode, wrap_mode: WrapMode) -> DocumentImage {
+    DocumentImage {
+        id,
+        bytes: b"\x89PNG\r\n\x1a\nfake".to_vec(),
+        alt_text: format!("image-{id}"),
+        width_points: 72.0,
+        height_points: 36.0,
+        lock_aspect_ratio: true,
+        opacity: 1.0,
+        layout_mode,
+        wrap_mode,
+        rendering: ImageRendering::Smooth,
+        horizontal_position: Default::default(),
+        vertical_position: Default::default(),
+        distance_from_text: Default::default(),
+        z_index: 1,
+        move_with_text: true,
+        allow_overlap: true,
+    }
+}
+
+fn zip_text(archive: &mut ZipArchive<Cursor<Vec<u8>>>, path: &str) -> String {
+    let mut file = archive
+        .by_name(path)
+        .unwrap_or_else(|_| panic!("missing {path}"));
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .unwrap_or_else(|_| panic!("failed to read {path}"));
+    text
 }

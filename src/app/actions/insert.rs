@@ -69,6 +69,8 @@ pub fn insert_image(
     canvas: &mut CanvasState,
     status_message: &mut String,
     history: &mut ChangeHistory,
+    #[cfg(not(target_arch = "wasm32"))]
+    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
 ) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -78,69 +80,81 @@ pub fn insert_image(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some(path) = FileDialog::new()
-            .add_filter("images", &["png", "jpg", "jpeg", "gif", "bmp"])
-            .pick_file()
-        else {
+        let tx = dialog_tx.clone();
+        std::thread::spawn(move || {
+            if let Some(path) = FileDialog::new()
+                .add_filter("images", &["png", "jpg", "jpeg", "gif", "bmp"])
+                .pick_file()
+            {
+                let _ = tx.send(crate::app::DialogAction::InsertImage(path));
+            }
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn finish_insert_image(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    status_message: &mut String,
+    history: &mut ChangeHistory,
+    path: &std::path::PathBuf,
+) {
+    let image = match load_image_for_document(path, document) {
+        Ok(image) => image,
+        Err(error) => {
+            *status_message = error;
             return;
-        };
+        }
+    };
 
-        let image = match load_image_for_document(&path, document) {
-            Ok(image) => image,
-            Err(error) => {
-                *status_message = error;
-                return;
-            }
-        };
-
-        history.checkpoint(document, f64::NAN);
-        if let Some((table_id, row, col)) = canvas.active_table_cell {
-            document.insert_table_cell_image(table_id, row, col, image, canvas.active_style);
-            if let Some(len) = document.table_cell_len(table_id, row, col) {
-                canvas.table_cell_selection = egui::text_selection::CCursorRange::one(
-                    egui::epaint::text::cursor::CCursor::new(len),
-                );
-            }
-            canvas.selected_image_id = None;
-            canvas.resize_drag = None;
-            canvas.move_drag = None;
-            canvas.table_resize_drag = None;
-            canvas.image_textures.clear();
-            *status_message = format!(
-                "Inserted {} into table cell",
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("image")
+    history.checkpoint(document, f64::NAN);
+    if let Some((table_id, row, col)) = canvas.active_table_cell {
+        document.insert_table_cell_image(table_id, row, col, image, canvas.active_style);
+        if let Some(len) = document.table_cell_len(table_id, row, col) {
+            canvas.table_cell_selection = egui::text_selection::CCursorRange::one(
+                egui::epaint::text::cursor::CCursor::new(len),
             );
-            return;
         }
-
-        let selected = canvas.selection.as_sorted_char_range();
-        let insert_at = selected.start;
-        if selected.start < selected.end {
-            document.delete_range(selected);
-        }
-
-        let image_id = image.id;
-        let cursor_index = document.insert_image(insert_at, image);
-        canvas.selection = egui::text_selection::CCursorRange::one(
-            egui::epaint::text::cursor::CCursor::new(cursor_index),
-        );
-        canvas.active_style = document.typing_style_at(cursor_index);
-        canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
-        canvas.selected_image_id = Some(image_id);
-        canvas.active_table_cell = None;
+        canvas.selected_image_id = None;
         canvas.resize_drag = None;
         canvas.move_drag = None;
         canvas.table_resize_drag = None;
         canvas.image_textures.clear();
         *status_message = format!(
-            "Inserted {}",
+            "Inserted {} into table cell",
             path.file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("image")
         );
+        return;
     }
+
+    let selected = canvas.selection.as_sorted_char_range();
+    let insert_at = selected.start;
+    if selected.start < selected.end {
+        document.delete_range(selected);
+    }
+
+    let image_id = image.id;
+    let cursor_index = document.insert_image(insert_at, image);
+    canvas.selection = egui::text_selection::CCursorRange::one(
+        egui::epaint::text::cursor::CCursor::new(cursor_index),
+    );
+    canvas.active_style = document.typing_style_at(cursor_index);
+    canvas.active_paragraph_style = document.paragraph_style_at(cursor_index);
+    canvas.selected_image_id = Some(image_id);
+    canvas.active_table_cell = None;
+    canvas.resize_drag = None;
+    canvas.move_drag = None;
+    canvas.table_resize_drag = None;
+    canvas.image_textures.clear();
+    *status_message = format!(
+        "Inserted {}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("image")
+    );
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -1,7 +1,10 @@
+pub mod export;
 pub mod helpers;
 pub mod numbering;
 pub mod styles;
 pub mod table;
+
+pub use export::document_to_docx;
 
 #[cfg(test)]
 mod tests;
@@ -15,8 +18,8 @@ use quick_xml::{events::Event as XmlEvent, Reader};
 use zip::ZipArchive;
 
 use crate::document::{
-    CharacterStyle, DocumentImage, DocumentTable, PageMargins, PageSetup, PageSize,
-    ParagraphStyle, Section, TextRun, OBJECT_REPLACEMENT_CHAR,
+    CharacterStyle, DocumentImage, DocumentTable, PageMargins, PageSetup, PageSize, ParagraphStyle,
+    Section, TextRun, OBJECT_REPLACEMENT_CHAR,
 };
 use serde::Serialize;
 
