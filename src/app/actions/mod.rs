@@ -2,28 +2,26 @@ pub mod file;
 pub mod format;
 pub mod insert;
 
-use std::path::PathBuf;
 use eframe::egui;
+use std::path::PathBuf;
 
-use crate::document::DocumentState;
 use super::{CanvasState, ChangeHistory};
+use crate::document::DocumentState;
 
 // Re-export public functions to keep the parent module's API stable
-pub use file::{
-    open_document, save_document, save_document_as, save_document_as_with_name,
-};
 #[cfg(not(target_arch = "wasm32"))]
 pub use file::open_document_from_path;
+pub use file::{open_document, save_document, save_document_as, save_document_as_with_name};
 
 pub use format::{
-    set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment,
-    set_text_color, sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic,
-    toggle_ordered_list, toggle_strikethrough, toggle_underline,
+    set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment, set_text_color,
+    sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
+    toggle_strikethrough, toggle_underline,
 };
 
 pub use insert::{
-    delete_table_column, delete_table_row, insert_image, insert_page_break,
-    insert_section_break, insert_table, insert_table_column, insert_table_row,
+    delete_table_column, delete_table_row, insert_image, insert_page_break, insert_section_break,
+    insert_table, insert_table_column, insert_table_row,
 };
 
 fn redo(
@@ -48,8 +46,9 @@ pub fn handle_global_shortcuts(
     history: &mut ChangeHistory,
     current_path: &mut Option<PathBuf>,
     status_message: &mut String,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
 ) -> bool {
     let mut document_changed = false;
 
@@ -80,8 +79,10 @@ pub fn handle_global_shortcuts(
         }
     }
     let redo_shortcut = ui.input_mut(|input| {
-        input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z)
-            || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
+        input.consume_key(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::Z,
+        ) || input.consume_key(egui::Modifiers::COMMAND, egui::Key::Y)
     });
     if redo_shortcut {
         document_changed |= redo(document, canvas, status_message, history);

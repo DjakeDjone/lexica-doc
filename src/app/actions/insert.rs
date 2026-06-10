@@ -1,15 +1,15 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::PathBuf;
-#[cfg(not(target_arch = "wasm32"))]
-use std::fs;
 use eframe::egui;
 #[cfg(not(target_arch = "wasm32"))]
 use rfd::FileDialog;
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 
-use crate::document::DocumentState;
+use crate::app::{CanvasState, ChangeHistory};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::document::DocumentImage;
-use crate::app::{CanvasState, ChangeHistory};
+use crate::document::DocumentState;
 
 pub fn insert_page_break(
     document: &mut DocumentState,
@@ -69,8 +69,9 @@ pub fn insert_image(
     canvas: &mut CanvasState,
     status_message: &mut String,
     history: &mut ChangeHistory,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
 ) {
     #[cfg(target_arch = "wasm32")]
     {

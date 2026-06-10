@@ -2,13 +2,14 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::document::DocumentState;
-use crate::grammar::{GrammarConfig, GrammarStatus};
+use super::RibbonTab;
 use crate::app::{
-    actions::sync_active_style, palette::{ThemeMode, ThemePalette},
+    actions::sync_active_style,
+    palette::{ThemeMode, ThemePalette},
     CanvasState, ChangeHistory,
 };
-use super::RibbonTab;
+use crate::document::DocumentState;
+use crate::grammar::{GrammarConfig, GrammarStatus};
 
 pub(crate) mod common;
 pub(crate) mod grammar;
@@ -41,8 +42,9 @@ pub(crate) fn paint_ribbon(
     grammar_status: &GrammarStatus,
     grammar_auto_check: &mut bool,
     can_download_grammar: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
     palette: ThemePalette,
 ) -> GrammarRibbonOutput {
     sync_active_style(document, canvas);

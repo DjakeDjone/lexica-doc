@@ -1,13 +1,10 @@
+use eframe::egui::{self, Color32, CornerRadius, Rect};
 use std::ops::Range;
 use std::sync::Arc;
-use eframe::egui::{
-    self, Color32, CornerRadius, Rect,
-};
 
 use crate::app::{ActiveHeaderFooter, CanvasState};
 use crate::document::{
-    text_format, CharacterStyle, DocumentState, HeaderFooterKind, SectionId,
-    TextRun,
+    text_format, CharacterStyle, DocumentState, HeaderFooterKind, SectionId, TextRun,
 };
 use crate::layout::document_points_to_screen_points;
 
@@ -268,7 +265,11 @@ pub(crate) fn split_runs_for_header_tabs(runs: &[TextRun]) -> Vec<HeaderSegment>
     segments
 }
 
-pub(crate) fn measure_runs_width(painter: &egui::Painter, runs: &[HeaderRunPiece], zoom: f32) -> f32 {
+pub(crate) fn measure_runs_width(
+    painter: &egui::Painter,
+    runs: &[HeaderRunPiece],
+    zoom: f32,
+) -> f32 {
     runs.iter()
         .map(|run| measure_text_width(painter, &run.text, run.style, zoom))
         .sum()

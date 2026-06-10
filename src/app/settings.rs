@@ -39,7 +39,6 @@ struct StoredAppSettings {
     ollama: OllamaSettings,
 }
 
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 enum StoredThemeMode {
     Light,
@@ -53,7 +52,11 @@ enum StoredZoomMode {
 }
 
 impl AppSettings {
-    pub(super) fn from_state(theme_mode: ThemeMode, canvas: &CanvasState, ollama: OllamaSettings) -> Self {
+    pub(super) fn from_state(
+        theme_mode: ThemeMode,
+        canvas: &CanvasState,
+        ollama: OllamaSettings,
+    ) -> Self {
         Self {
             theme_mode,
             zoom: canvas.zoom.clamp(0.5, 3.0),
@@ -62,7 +65,12 @@ impl AppSettings {
         }
     }
 
-    pub(super) fn apply(self, theme_mode: &mut ThemeMode, canvas: &mut CanvasState, ollama: &mut OllamaSettings) {
+    pub(super) fn apply(
+        self,
+        theme_mode: &mut ThemeMode,
+        canvas: &mut CanvasState,
+        ollama: &mut OllamaSettings,
+    ) {
         *theme_mode = self.theme_mode;
         canvas.zoom = self.zoom.clamp(0.5, 3.0);
         canvas.zoom_mode = self.zoom_mode;

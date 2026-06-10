@@ -1,11 +1,11 @@
-use std::ops::Range;
-use serde::Serialize;
 use eframe::egui::Color32;
+use serde::Serialize;
+use std::ops::Range;
 
 use crate::document::text::char_to_byte_index;
 use crate::document::types::{
-    append_text_run, CharacterStyle, DocumentImage, TextRun, OBJECT_REPLACEMENT_CHAR,
-    DocumentState, ListKind,
+    append_text_run, CharacterStyle, DocumentImage, DocumentState, ListKind, TextRun,
+    OBJECT_REPLACEMENT_CHAR,
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -76,7 +76,11 @@ impl TableCell {
         self.normalize_runs();
     }
 
-    pub(crate) fn apply_style_to_range(&mut self, range: Range<usize>, mutate: impl Fn(&mut CharacterStyle)) {
+    pub(crate) fn apply_style_to_range(
+        &mut self,
+        range: Range<usize>,
+        mutate: impl Fn(&mut CharacterStyle),
+    ) {
         if range.start >= range.end {
             return;
         }

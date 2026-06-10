@@ -40,6 +40,18 @@ pub struct ImportedDocx {
     pub margins: Option<PageMargins>,
     pub different_odd_even_pages: bool,
     pub sections: Vec<Section>,
+    #[serde(skip)]
+    pub(crate) raw_sections: Vec<ParsedSectionData>,
+}
+
+#[derive(Default, Debug)]
+pub(crate) struct ParsedSectionData {
+    pub starts_at_paragraph: usize,
+    pub page_size: Option<PageSize>,
+    pub margins: Option<PageMargins>,
+    pub different_first_page: bool,
+    pub header_refs: Vec<(String, String)>,
+    pub footer_refs: Vec<(String, String)>,
 }
 
 pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
@@ -59,6 +71,7 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
     let styles = load_styles(&mut archive, &theme_fonts)?;
     let relationships = load_document_relationships(&mut archive)?;
     let media = load_media_store(&mut archive, &relationships)?;
+    let header_footer_store = load_header_footer_store(&mut archive, &relationships)?;
     let mut imported = parse_document_xml(
         &document_xml,
         &numbering,
@@ -68,6 +81,61 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
         &media,
     )?;
     imported.different_odd_even_pages = different_odd_even_pages;
+    
+    // We expect parse_document_xml to populate imported.raw_sections.
+    // Let's build imported.sections from them!
+    for (i, raw) in imported.raw_sections.iter().enumerate() {
+        let mut setup = PageSetup::standard();
+        if let Some(page_size) = raw.page_size.or(imported.page_size) {
+            setup.page_size = page_size;
+        }
+        if let Some(margins) = raw.margins.or(imported.margins) {
+            setup.margins = margins;
+        }
+        
+        let mut hf = crate::document::SectionHeaderFooter::empty(i > 0);
+        
+        for (kind, id) in &raw.header_refs {
+            if let Some(target) = relationships.header_targets.get(id) {
+                if let Some(xml) = header_footer_store.get(target) {
+                    let story = parse_header_footer(xml, &numbering, &styles, &theme_fonts, &relationships, &media);
+                    let variant = match kind.as_str() {
+                        "first" => crate::document::HeaderFooterVariant::First,
+                        "even" => crate::document::HeaderFooterVariant::Even,
+                        _ => crate::document::HeaderFooterVariant::Default,
+                    };
+                    let slot = hf.slot_mut(crate::document::HeaderFooterKind::Header, variant);
+                    slot.story = story;
+                    slot.linked_to_previous = false;
+                }
+            }
+        }
+        
+        for (kind, id) in &raw.footer_refs {
+            if let Some(target) = relationships.footer_targets.get(id) {
+                if let Some(xml) = header_footer_store.get(target) {
+                    let story = parse_header_footer(xml, &numbering, &styles, &theme_fonts, &relationships, &media);
+                    let variant = match kind.as_str() {
+                        "first" => crate::document::HeaderFooterVariant::First,
+                        "even" => crate::document::HeaderFooterVariant::Even,
+                        _ => crate::document::HeaderFooterVariant::Default,
+                    };
+                    let slot = hf.slot_mut(crate::document::HeaderFooterKind::Footer, variant);
+                    slot.story = story;
+                    slot.linked_to_previous = false;
+                }
+            }
+        }
+        
+        imported.sections.push(Section {
+            id: i + 1,
+            starts_at_paragraph: raw.starts_at_paragraph,
+            page_setup: setup,
+            different_first_page: raw.different_first_page,
+            header_footer: hf,
+        });
+    }
+
     if imported.sections.is_empty() {
         let mut setup = PageSetup::standard();
         if let Some(page_size) = imported.page_size {
@@ -79,6 +147,45 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
         imported.sections.push(Section::first(setup));
     }
     Ok(imported)
+}
+
+fn parse_header_footer(
+    xml: &str,
+    numbering: &NumberingDefinitions,
+    styles: &DocxStyles,
+    theme_fonts: &ThemeFonts,
+    relationships: &DocumentRelationships,
+    media: &HashMap<String, Vec<u8>>,
+) -> crate::document::HeaderFooterStory {
+    if let Ok(imported) = parse_document_xml(xml, numbering, styles, theme_fonts, relationships, media) {
+        // Strip out the trailing newline added by default if it's empty
+        if imported.runs.len() == 1 && imported.runs[0].text.is_empty() {
+            crate::document::HeaderFooterStory::empty()
+        } else {
+            crate::document::HeaderFooterStory::from_runs(imported.runs)
+        }
+    } else {
+        crate::document::HeaderFooterStory::empty()
+    }
+}
+
+fn load_header_footer_store(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    relationships: &DocumentRelationships,
+) -> Result<HashMap<String, String>, String> {
+    let mut store = HashMap::new();
+
+    for target in relationships.header_targets.values().chain(relationships.footer_targets.values()) {
+        let Ok(mut file) = archive.by_name(target) else {
+            continue;
+        };
+        let mut xml = String::new();
+        file.read_to_string(&mut xml)
+            .map_err(|error| format!("failed to read {target}: {error}"))?;
+        store.insert(target.clone(), xml);
+    }
+
+    Ok(store)
 }
 
 fn load_even_and_odd_setting(archive: &mut ZipArchive<Cursor<&[u8]>>) -> Result<bool, String> {
@@ -182,6 +289,8 @@ pub(crate) struct DrawingState {
 #[derive(Default)]
 pub(crate) struct DocumentRelationships {
     pub(crate) image_targets: HashMap<String, String>,
+    pub(crate) header_targets: HashMap<String, String>,
+    pub(crate) footer_targets: HashMap<String, String>,
 }
 
 pub(crate) fn parse_document_xml(
@@ -211,6 +320,12 @@ pub(crate) fn parse_document_xml(
     let mut margins = None;
     let mut next_image_id = 1usize;
     let mut next_table_id = 1usize;
+
+    let mut current_section_start_paragraph = 0;
+    let mut current_header_refs = Vec::new();
+    let mut current_footer_refs = Vec::new();
+    let mut different_first_page = false;
+    let mut parsed_sections = Vec::new();
 
     loop {
         match reader.read_event() {
@@ -302,6 +417,17 @@ pub(crate) fn parse_document_xml(
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),
                 b"pgSz" => page_size = parse_page_size(&event),
                 b"pgMar" => margins = parse_page_margins(&event),
+                b"titlePg" => different_first_page = true,
+                b"headerReference" => {
+                    if let (Some(rel_id), Some(kind)) = (attr_value(&event, b"id"), attr_value(&event, b"type")) {
+                        current_header_refs.push((kind, rel_id));
+                    }
+                }
+                b"footerReference" => {
+                    if let (Some(rel_id), Some(kind)) = (attr_value(&event, b"id"), attr_value(&event, b"type")) {
+                        current_footer_refs.push((kind, rel_id));
+                    }
+                }
                 b"drawing" | b"pict" => current_drawing = Some(DrawingState::default()),
                 b"anchor" => {
                     if let Some(drawing) = current_drawing.as_mut() {
@@ -428,6 +554,17 @@ pub(crate) fn parse_document_xml(
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),
                 b"pgSz" => page_size = parse_page_size(&event),
                 b"pgMar" => margins = parse_page_margins(&event),
+                b"titlePg" => different_first_page = true,
+                b"headerReference" => {
+                    if let (Some(rel_id), Some(kind)) = (attr_value(&event, b"id"), attr_value(&event, b"type")) {
+                        current_header_refs.push((kind, rel_id));
+                    }
+                }
+                b"footerReference" => {
+                    if let (Some(rel_id), Some(kind)) = (attr_value(&event, b"id"), attr_value(&event, b"type")) {
+                        current_footer_refs.push((kind, rel_id));
+                    }
+                }
                 b"wrapSquare" => {
                     if let Some(drawing) = current_drawing.as_mut() {
                         drawing.wrap_mode = Some(crate::document::WrapMode::Square);
@@ -519,6 +656,20 @@ pub(crate) fn parse_document_xml(
                     paragraph_images.push(current_paragraph_image.clone());
                     paragraph_tables.push(None);
                 }
+                b"sectPr" => {
+                    parsed_sections.push(ParsedSectionData {
+                        starts_at_paragraph: current_section_start_paragraph,
+                        page_size,
+                        margins,
+                        different_first_page,
+                        header_refs: current_header_refs.clone(),
+                        footer_refs: current_footer_refs.clone(),
+                    });
+                    current_section_start_paragraph = paragraph_styles.len();
+                    current_header_refs.clear();
+                    current_footer_refs.clear();
+                    different_first_page = false;
+                }
                 _ => {}
             },
             Ok(XmlEvent::Eof) => break,
@@ -544,6 +695,18 @@ pub(crate) fn parse_document_xml(
         paragraph_tables.push(None);
     }
 
+    // Capture the final section if a sectPr wasn't explicitly ended
+    if current_section_start_paragraph < paragraph_styles.len() || parsed_sections.is_empty() {
+        parsed_sections.push(ParsedSectionData {
+            starts_at_paragraph: current_section_start_paragraph,
+            page_size,
+            margins,
+            different_first_page,
+            header_refs: current_header_refs.clone(),
+            footer_refs: current_footer_refs.clone(),
+        });
+    }
+
     Ok(ImportedDocx {
         runs,
         paragraph_styles,
@@ -553,6 +716,7 @@ pub(crate) fn parse_document_xml(
         margins,
         different_odd_even_pages: false,
         sections: Vec::new(),
+        raw_sections: parsed_sections,
     })
 }
 
@@ -572,18 +736,25 @@ fn parse_document_relationships(relationships_xml: &str) -> Result<DocumentRelat
                 let Some(rel_type) = attr_value(&event, b"Type") else {
                     continue;
                 };
-                if !rel_type.contains("/image") {
-                    continue;
-                }
-
                 let (Some(id), Some(target)) =
                     (attr_value(&event, b"Id"), attr_value(&event, b"Target"))
                 else {
                     continue;
                 };
-                relationships
-                    .image_targets
-                    .insert(id, normalize_relationship_target(&target));
+
+                if rel_type.contains("/image") {
+                    relationships
+                        .image_targets
+                        .insert(id, normalize_relationship_target(&target));
+                } else if rel_type.ends_with("/header") {
+                    relationships
+                        .header_targets
+                        .insert(id, normalize_relationship_target(&target));
+                } else if rel_type.ends_with("/footer") {
+                    relationships
+                        .footer_targets
+                        .insert(id, normalize_relationship_target(&target));
+                }
             }
             Ok(XmlEvent::Eof) => break,
             Err(error) => {

@@ -1,10 +1,10 @@
 use eframe::egui;
 
+use crate::app::{ActiveHeaderFooter, CanvasState, ChangeHistory};
 use crate::document::{
     CharacterStyle, DocumentState, FontChoice, ListKind, ParagraphAlignment, ParagraphStyle,
     TextRun,
 };
-use crate::app::{ActiveHeaderFooter, CanvasState, ChangeHistory};
 
 pub fn toggle_bold(
     document: &mut DocumentState,

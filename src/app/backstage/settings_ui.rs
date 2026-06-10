@@ -1,7 +1,7 @@
-use eframe::egui;
-use crate::app::settings::OllamaSettings;
-use crate::app::palette::ThemePalette;
 use super::backstage_surface;
+use crate::app::palette::ThemePalette;
+use crate::app::settings::OllamaSettings;
+use eframe::egui;
 
 pub fn paint_settings(
     ui: &mut egui::Ui,

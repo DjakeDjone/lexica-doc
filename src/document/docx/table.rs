@@ -1,10 +1,8 @@
 use quick_xml::{events::Event as XmlEvent, Reader};
 
+use super::styles::{apply_resolved_font, resolve_font_from_event_without_theme};
+use super::{append_plain, attr_value, docx_flag, local_name, parse_hex_color, twips_to_points};
 use crate::document::{CharacterStyle, DocumentTable, TableCell, TextRun};
-use super::{
-    attr_value, local_name, docx_flag, parse_hex_color, twips_to_points, append_plain,
-};
-use super::styles::{resolve_font_from_event_without_theme, apply_resolved_font};
 
 pub(crate) fn parse_docx_table(
     reader: &mut Reader<&[u8]>,

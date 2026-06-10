@@ -1,4 +1,5 @@
 use super::*;
+use crate::canvas::layout::DocumentLayout;
 use crate::{
     app::{CanvasState, ZoomMode},
     document::{
@@ -8,7 +9,6 @@ use crate::{
     },
     layout::fit_page_zoom,
 };
-use crate::canvas::layout::DocumentLayout;
 
 /// Run `layout_document` inside a headless egui context and return
 /// the layout result for assertion.
@@ -233,29 +233,53 @@ fn resize_geometry_non_locked_handles_keep_opposite_edges_stable() {
     ];
 
     for (handle, expected) in cases {
-        let actual = crate::canvas::image::resized_image_geometry(handle, 100.0, 80.0, 10.0, 15.0, false);
+        let actual =
+            crate::canvas::image::resized_image_geometry(handle, 100.0, 80.0, 10.0, 15.0, false);
         assert_geometry_close(actual, expected, handle);
     }
 }
 
 #[test]
 fn resize_geometry_clamps_to_minimum_size() {
-    let west = crate::canvas::image::resized_image_geometry(ResizeHandle::W, 100.0, 80.0, 200.0, 0.0, false);
+    let west = crate::canvas::image::resized_image_geometry(
+        ResizeHandle::W,
+        100.0,
+        80.0,
+        200.0,
+        0.0,
+        false,
+    );
     assert_geometry_close(west, (24.0, 80.0, 76.0, 0.0), ResizeHandle::W);
 
-    let north = crate::canvas::image::resized_image_geometry(ResizeHandle::N, 100.0, 80.0, 0.0, 200.0, false);
+    let north = crate::canvas::image::resized_image_geometry(
+        ResizeHandle::N,
+        100.0,
+        80.0,
+        0.0,
+        200.0,
+        false,
+    );
     assert_geometry_close(north, (100.0, 24.0, 0.0, 56.0), ResizeHandle::N);
 }
 
 #[test]
 fn resize_geometry_locked_ratio_keeps_anchors_stable() {
-    let nw = crate::canvas::image::resized_image_geometry(ResizeHandle::NW, 100.0, 50.0, 20.0, 0.0, true);
+    let nw = crate::canvas::image::resized_image_geometry(
+        ResizeHandle::NW,
+        100.0,
+        50.0,
+        20.0,
+        0.0,
+        true,
+    );
     assert_geometry_close(nw, (80.0, 40.0, 20.0, 10.0), ResizeHandle::NW);
 
-    let east = crate::canvas::image::resized_image_geometry(ResizeHandle::E, 100.0, 50.0, 20.0, 0.0, true);
+    let east =
+        crate::canvas::image::resized_image_geometry(ResizeHandle::E, 100.0, 50.0, 20.0, 0.0, true);
     assert_geometry_close(east, (120.0, 60.0, 0.0, -5.0), ResizeHandle::E);
 
-    let south = crate::canvas::image::resized_image_geometry(ResizeHandle::S, 100.0, 50.0, 0.0, 20.0, true);
+    let south =
+        crate::canvas::image::resized_image_geometry(ResizeHandle::S, 100.0, 50.0, 0.0, 20.0, true);
     assert_geometry_close(south, (140.0, 70.0, -20.0, 0.0), ResizeHandle::S);
 }
 
@@ -524,8 +548,7 @@ fn wrap_modes_change_image_row_geometry() {
     let square = run_headless_layout(&make_doc(WrapMode::Square), &canvas, wrap_width);
     let tight = run_headless_layout(&make_doc(WrapMode::Tight), &canvas, wrap_width);
     let through = run_headless_layout(&make_doc(WrapMode::Through), &canvas, wrap_width);
-    let top_bottom =
-        run_headless_layout(&make_doc(WrapMode::TopAndBottom), &canvas, wrap_width);
+    let top_bottom = run_headless_layout(&make_doc(WrapMode::TopAndBottom), &canvas, wrap_width);
 
     let inline_row = &inline.galley.rows[inline.images[0].row_index];
     let square_row = &square.galley.rows[square.images[0].row_index];

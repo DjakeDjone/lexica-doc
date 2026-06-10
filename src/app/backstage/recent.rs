@@ -7,8 +7,8 @@ use std::{
 
 use eframe::egui;
 
-use crate::app::palette::ThemePalette;
 use super::BackstageOutput;
+use crate::app::palette::ThemePalette;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct FolderEntry {

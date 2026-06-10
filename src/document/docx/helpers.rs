@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::path::Path;
 use eframe::egui::Color32;
 use quick_xml::events::BytesStart;
+use std::collections::HashMap;
+use std::path::Path;
 
 use crate::document::{
     CharacterStyle, DistanceFromText, DocumentImage, LineSpacing, LineSpacingKind, PageMargins,

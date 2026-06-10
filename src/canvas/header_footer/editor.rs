@@ -1,20 +1,18 @@
-use std::ops::Range;
 use eframe::egui::{
     self, epaint::text::cursor::CCursor, text_selection::visuals::paint_text_cursor,
-    text_selection::CCursorRange, Align2, Color32, FontFamily, FontId, Id, Rect,
-    Stroke,
+    text_selection::CCursorRange, Align2, Color32, FontFamily, FontId, Id, Rect, Stroke,
 };
+use std::ops::Range;
 
+use super::super::page_layout::PageLayout;
+use super::rendering::{
+    header_footer_line_height, measure_runs_width, measure_text_width, page_footer_rect,
+    page_header_rect, paint_tab_aligned_margin_runs, runs_plain_text, runs_total_chars,
+    slice_run_text_chars, split_runs_for_header_tabs, HeaderSegment,
+};
 use crate::app::{ActiveHeaderFooter, CanvasState, ChangeHistory};
 use crate::document::{CharacterStyle, DocumentState, HeaderFooterKind, TextRun};
 use crate::layout::document_points_to_screen_points;
-use super::super::page_layout::PageLayout;
-use super::rendering::{
-    paint_tab_aligned_margin_runs, page_header_rect, page_footer_rect,
-    runs_plain_text, runs_total_chars, slice_run_text_chars, HeaderSegment,
-    measure_text_width, header_footer_line_height, split_runs_for_header_tabs,
-    measure_runs_width,
-};
 
 pub(crate) fn paint_active_header_footer_editor(
     ui: &mut egui::Ui,
@@ -714,7 +712,11 @@ fn header_footer_cursor_pos(
         _ => rect.right() - segment_width,
     };
 
-    egui::pos2(start_x + prefix_width, rect.top() + (rect.height() - header_footer_line_height(CharacterStyle::default(), zoom)) * 0.5)
+    egui::pos2(
+        start_x + prefix_width,
+        rect.top()
+            + (rect.height() - header_footer_line_height(CharacterStyle::default(), zoom)) * 0.5,
+    )
 }
 
 fn measure_segment_prefix_width(

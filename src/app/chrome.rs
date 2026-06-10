@@ -3,11 +3,11 @@ pub(crate) mod status_bar;
 pub(crate) mod tab_row;
 pub(crate) mod title_bar;
 
-use crate::document::DocumentState;
 use crate::app::CanvasState;
+use crate::document::DocumentState;
 
-pub(super) use ribbon::GrammarRibbonOutput;
 pub(super) use ribbon::paint_ribbon;
+pub(super) use ribbon::GrammarRibbonOutput;
 pub(super) use status_bar::paint_status_bar;
 pub(super) use tab_row::paint_tab_row;
 pub(super) use title_bar::paint_title_bar;
@@ -105,8 +105,8 @@ fn header_footer_contextual_tab_visible(canvas: &CanvasState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{HeaderFooterKind, HeaderFooterVariant};
     use crate::app::ActiveHeaderFooter;
+    use crate::document::{HeaderFooterKind, HeaderFooterVariant};
 
     #[test]
     fn layout_tab_contract_lists_only_page_layout_commands() {

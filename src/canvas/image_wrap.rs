@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use eframe::egui::{self, Rect};
+use std::sync::Arc;
 
 use crate::document::{DocumentImage, WrapMode, OBJECT_REPLACEMENT_CHAR};
 use crate::layout::document_points_to_screen_points;

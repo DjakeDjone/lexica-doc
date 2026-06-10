@@ -1,9 +1,9 @@
 use eframe::egui;
 
-use crate::document::{DocumentState, HeaderFooterKind, PageMargins, PageSetup, PageSize};
-use crate::app::{CanvasState, ChangeHistory, palette::ThemePalette};
 use super::common::ribbon_group;
 use super::header_footer::{enter_header_footer, page_number_menu_button, set_blank_header_footer};
+use crate::app::{palette::ThemePalette, CanvasState, ChangeHistory};
+use crate::document::{DocumentState, HeaderFooterKind, PageMargins, PageSetup, PageSize};
 
 pub(crate) fn ribbon_page_setup_group(
     ui: &mut egui::Ui,
@@ -150,7 +150,12 @@ pub(crate) fn ribbon_flow_group(
                 ui.close();
             }
             if ui.button("Section").clicked() {
-                crate::app::actions::insert_section_break(document, canvas, status_message, history);
+                crate::app::actions::insert_section_break(
+                    document,
+                    canvas,
+                    status_message,
+                    history,
+                );
                 ui.close();
             }
         });

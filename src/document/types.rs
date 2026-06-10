@@ -1,6 +1,6 @@
-use std::ops::Range;
 use eframe::egui::{epaint::text::TextFormat, Color32, FontFamily, FontId, Stroke};
 use serde::Serialize;
+use std::ops::Range;
 
 use crate::document::text::{line_char_range, slice_char_range, word_char_range};
 
@@ -151,7 +151,10 @@ impl ListKind {
     }
 }
 
-pub(crate) fn serialize_color32<S: serde::Serializer>(color: &Color32, s: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn serialize_color32<S: serde::Serializer>(
+    color: &Color32,
+    s: S,
+) -> Result<S::Ok, S::Error> {
     s.serialize_str(&format!(
         "#{:02x}{:02x}{:02x}{:02x}",
         color.r(),

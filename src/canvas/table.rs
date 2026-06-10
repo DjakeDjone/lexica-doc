@@ -10,8 +10,11 @@ use eframe::egui::{
 };
 
 use crate::{
-    app::{CanvasState, TableResizeHandleRect, TableResizeKind, TableResizeDrag, ChangeHistory},
-    document::{text_format, DocumentImage, DocumentTable, TableCell, OBJECT_REPLACEMENT_CHAR, DocumentState},
+    app::{CanvasState, ChangeHistory, TableResizeDrag, TableResizeHandleRect, TableResizeKind},
+    document::{
+        text_format, DocumentImage, DocumentState, DocumentTable, TableCell,
+        OBJECT_REPLACEMENT_CHAR,
+    },
     layout::document_points_to_screen_points,
 };
 
@@ -372,7 +375,10 @@ pub(super) fn table_row_heights_screen(
     row_heights
 }
 
-pub(super) fn table_cell_hit(canvas: &CanvasState, pointer_pos: egui::Pos2) -> Option<(usize, usize, usize)> {
+pub(super) fn table_cell_hit(
+    canvas: &CanvasState,
+    pointer_pos: egui::Pos2,
+) -> Option<(usize, usize, usize)> {
     canvas
         .table_cell_rects
         .iter()

@@ -2,13 +2,11 @@ use std::fmt::Write as _;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
-use crate::document::{
-    DocumentState, DocumentTable, ListKind, OBJECT_REPLACEMENT_CHAR,
-};
 use super::{
     css_color, html_escape, image_mime_type, image_position_css, line_spacing_css,
     paragraph_alignment_css, run_style_css,
 };
+use crate::document::{DocumentState, DocumentTable, ListKind, OBJECT_REPLACEMENT_CHAR};
 
 impl DocumentState {
     pub(crate) fn to_html(&self) -> String {

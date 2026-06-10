@@ -2,11 +2,12 @@ use std::path::PathBuf;
 
 use eframe::egui;
 
-use crate::document::{DocumentState, ParagraphAlignment};
 use crate::app::{
     actions::{open_document, save_document, save_document_as},
-    CanvasState, ChangeHistory, palette::ThemePalette,
+    palette::ThemePalette,
+    CanvasState, ChangeHistory,
 };
+use crate::document::{DocumentState, ParagraphAlignment};
 
 pub(crate) fn ribbon_file_group(
     ui: &mut egui::Ui,
@@ -15,14 +16,22 @@ pub(crate) fn ribbon_file_group(
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
     history: &mut ChangeHistory,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Clipboard", palette, |ui| {
         if ui.button("📂 Open").clicked() {
             #[cfg(not(target_arch = "wasm32"))]
-            let _ = open_document(document, canvas, status_message, current_path, history, dialog_tx);
+            let _ = open_document(
+                document,
+                canvas,
+                status_message,
+                current_path,
+                history,
+                dialog_tx,
+            );
             #[cfg(target_arch = "wasm32")]
             let _ = open_document(document, canvas, status_message, current_path, history);
         }
@@ -41,7 +50,12 @@ pub(crate) fn ribbon_file_group(
     });
 }
 
-pub(crate) fn ribbon_info_group(ui: &mut egui::Ui, title: &str, message: &str, palette: ThemePalette) {
+pub(crate) fn ribbon_info_group(
+    ui: &mut egui::Ui,
+    title: &str,
+    message: &str,
+    palette: ThemePalette,
+) {
     ribbon_group(ui, title, palette, |ui| {
         ui.label(
             egui::RichText::new(message)

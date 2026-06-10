@@ -1,7 +1,7 @@
 use eframe::egui;
 
-use crate::app::palette::ThemePalette;
 use super::RibbonTab;
+use crate::app::palette::ThemePalette;
 
 pub(crate) fn paint_tab_row(
     ui: &mut egui::Ui,

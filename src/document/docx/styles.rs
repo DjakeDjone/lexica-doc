@@ -3,12 +3,12 @@ use std::collections::{HashMap, HashSet};
 use eframe::egui::Color32;
 use quick_xml::{events::Event as XmlEvent, Reader};
 
-use crate::document::{
-    CharacterStyle, FontChoice, ParagraphStyle, ParagraphAlignment, LineSpacing,
-};
 use super::{
-    attr_value, local_name, docx_flag, parse_hex_color, highlight_color,
-    twips_to_points, parse_line_spacing,
+    attr_value, docx_flag, highlight_color, local_name, parse_hex_color, parse_line_spacing,
+    twips_to_points,
+};
+use crate::document::{
+    CharacterStyle, FontChoice, LineSpacing, ParagraphAlignment, ParagraphStyle,
 };
 
 pub(crate) const DOCX_CARLITO: &str = "docx-carlito";
@@ -323,7 +323,10 @@ pub(crate) fn resolve_font_name(name: &str) -> ResolvedFont {
     }
 }
 
-pub(crate) fn parse_styles_xml(styles_xml: &str, theme_fonts: &ThemeFonts) -> Result<DocxStyles, String> {
+pub(crate) fn parse_styles_xml(
+    styles_xml: &str,
+    theme_fonts: &ThemeFonts,
+) -> Result<DocxStyles, String> {
     let mut reader = Reader::from_str(styles_xml);
     reader.config_mut().trim_text(false);
 

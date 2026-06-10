@@ -1,7 +1,6 @@
 use crate::document::types::{
-    plain_text_from_runs, DocumentState, HeaderFooterKind,
-    HeaderFooterStory, HeaderFooterVariant, PageMargins, PageSetup, PageSize, ResolvedHeaderFooter,
-    Section, SectionId, TextRun,
+    plain_text_from_runs, DocumentState, HeaderFooterKind, HeaderFooterStory, HeaderFooterVariant,
+    PageMargins, PageSetup, PageSize, ResolvedHeaderFooter, Section, SectionId, TextRun,
 };
 
 impl DocumentState {

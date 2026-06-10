@@ -98,7 +98,10 @@ impl GrammarChecker {
             .await;
 
         let response = send_result.map_err(|err| {
-            anyhow::anyhow!("LanguageTool connection failed on port {}: {err}", self.port)
+            anyhow::anyhow!(
+                "LanguageTool connection failed on port {}: {err}",
+                self.port
+            )
         })?;
 
         let payload: LtCheckResponse = response.error_for_status()?.json().await?;

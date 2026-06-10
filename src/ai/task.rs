@@ -1,5 +1,5 @@
-use std::time::Duration;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
@@ -63,7 +63,9 @@ pub async fn run_ai_task(
         }
 
         if pending.text_before_cursor.trim().is_empty() {
-            let _ = results_tx.send(AiTaskResult::Completed(String::new())).await;
+            let _ = results_tx
+                .send(AiTaskResult::Completed(String::new()))
+                .await;
             continue;
         }
 
@@ -76,9 +78,7 @@ pub async fn run_ai_task(
             model: pending.model.clone(),
             prompt,
             stream: false,
-            options: OllamaOptions {
-                num_predict: 50,
-            },
+            options: OllamaOptions { num_predict: 50 },
         };
 
         let endpoint = if pending.endpoint.ends_with('/') {
@@ -94,11 +94,15 @@ pub async fn run_ai_task(
                 if response.status().is_success() {
                     if let Ok(parsed) = response.json::<OllamaGenerateResponse>().await {
                         let _ = results_tx
-                            .send(AiTaskResult::Completed(parsed.response.trim_end().to_owned()))
+                            .send(AiTaskResult::Completed(
+                                parsed.response.trim_end().to_owned(),
+                            ))
                             .await;
                     } else {
                         let _ = results_tx
-                            .send(AiTaskResult::Unavailable("Failed to parse Ollama response".to_owned()))
+                            .send(AiTaskResult::Unavailable(
+                                "Failed to parse Ollama response".to_owned(),
+                            ))
                             .await;
                     }
                 } else {
@@ -112,7 +116,9 @@ pub async fn run_ai_task(
             }
             Err(err) => {
                 let _ = results_tx
-                    .send(AiTaskResult::Unavailable(format!("Request to Ollama failed: {err}")))
+                    .send(AiTaskResult::Unavailable(format!(
+                        "Request to Ollama failed: {err}"
+                    )))
                     .await;
             }
         }

@@ -53,11 +53,18 @@ pub(super) fn handle_pointer_interaction(
         if let Some(completion) = &canvas.ai_completion {
             let primary_idx = canvas.selection.primary.index;
             if cursor.index > primary_idx {
-                cursor.index = cursor.index.saturating_sub(completion.chars().count()).max(primary_idx);
+                cursor.index = cursor
+                    .index
+                    .saturating_sub(completion.chars().count())
+                    .max(primary_idx);
             }
         }
 
-        if response.clicked() || response.drag_started() || response.double_clicked() || response.triple_clicked() {
+        if response.clicked()
+            || response.drag_started()
+            || response.double_clicked()
+            || response.triple_clicked()
+        {
             canvas.ai_completion = None;
         }
 
@@ -309,7 +316,7 @@ pub(super) fn handle_keyboard_input(
         };
         adjust(&mut canvas.selection.primary.index);
         adjust(&mut canvas.selection.secondary.index);
-        
+
         let total_chars = document.total_chars();
         canvas.selection.primary.index = canvas.selection.primary.index.min(total_chars);
         canvas.selection.secondary.index = canvas.selection.secondary.index.min(total_chars);

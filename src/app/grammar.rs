@@ -2,6 +2,7 @@ use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
 
+use super::WorsApp;
 use crate::grammar::GrammarStatus;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::grammar::{
@@ -10,7 +11,6 @@ use crate::grammar::{
     task::{run_grammar_task, GrammarRequest, GrammarTaskResult},
     GrammarChecker,
 };
-use super::WorsApp;
 
 const GRAMMAR_QUEUE_CAPACITY: usize = 8;
 

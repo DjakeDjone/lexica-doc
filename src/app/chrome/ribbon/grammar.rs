@@ -1,9 +1,9 @@
 use eframe::egui;
 
-use crate::grammar::{GrammarConfig, GrammarStatus, Language};
-use crate::app::palette::ThemePalette;
-use super::GrammarRibbonOutput;
 use super::common::ribbon_group;
+use super::GrammarRibbonOutput;
+use crate::app::palette::ThemePalette;
+use crate::grammar::{GrammarConfig, GrammarStatus, Language};
 
 pub(crate) fn ribbon_grammer_actions_group(
     ui: &mut egui::Ui,

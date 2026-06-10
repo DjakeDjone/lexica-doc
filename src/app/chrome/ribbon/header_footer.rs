@@ -1,8 +1,8 @@
 use eframe::egui;
 
-use crate::document::{DocumentState, HeaderFooterKind, HeaderFooterVariant, TextRun};
-use crate::app::{ActiveHeaderFooter, CanvasState, ChangeHistory, palette::ThemePalette};
 use super::common::ribbon_group;
+use crate::app::{palette::ThemePalette, ActiveHeaderFooter, CanvasState, ChangeHistory};
+use crate::document::{DocumentState, HeaderFooterKind, HeaderFooterVariant, TextRun};
 
 pub(crate) fn ribbon_header_footer_insert_group(
     ui: &mut egui::Ui,

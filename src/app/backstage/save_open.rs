@@ -1,12 +1,12 @@
-use std::path::PathBuf;
 use eframe::egui;
+use std::path::PathBuf;
 
-use crate::document::DocumentState;
-use crate::app::palette::ThemePalette;
 use super::{
-    backstage_mid_surface, backstage_two_line_row, file_name_with_extension,
-    BackstageLocation, BackstageOutput, BackstageSection, BackstageState, SaveFormat,
+    backstage_mid_surface, backstage_two_line_row, file_name_with_extension, BackstageLocation,
+    BackstageOutput, BackstageSection, BackstageState, SaveFormat,
 };
+use crate::app::palette::ThemePalette;
+use crate::document::DocumentState;
 
 pub fn paint_backstage_locations(
     ui: &mut egui::Ui,
@@ -146,7 +146,9 @@ pub fn paint_folder_contents(
             .max_height((ui.available_height() - 8.0).max(120.0))
             .show(ui, |ui| {
                 if let Some(parent) = dir.parent() {
-                    if super::recent::folder_row(ui, "..", "Parent folder", true, width, palette).clicked() {
+                    if super::recent::folder_row(ui, "..", "Parent folder", true, width, palette)
+                        .clicked()
+                    {
                         state.local_dir = Some(parent.to_path_buf());
                     }
                 }

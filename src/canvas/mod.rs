@@ -4,27 +4,26 @@ mod page_layout;
 mod palette;
 mod table;
 
-pub mod layout;
-pub mod image_wrap;
 pub mod header_footer;
+pub mod image_wrap;
+pub mod layout;
 
 #[cfg(test)]
 mod tests;
 
 use eframe::egui::{
-    self, epaint::text::cursor::CCursor, epaint::CornerRadius, text_selection::visuals::paint_text_cursor,
-    text_selection::visuals::paint_text_selection, text_selection::CCursorRange, Align2, Color32,
-    EventFilter, FontFamily, FontId, Id, Rect, Sense, Stroke, StrokeKind,
+    self, epaint::text::cursor::CCursor, epaint::CornerRadius,
+    text_selection::visuals::paint_text_cursor, text_selection::visuals::paint_text_selection,
+    text_selection::CCursorRange, Align2, Color32, EventFilter, FontFamily, FontId, Id, Rect,
+    Sense, Stroke, StrokeKind,
 };
 
 use crate::{
     app::{
-        ActiveHeaderFooter, CanvasState, ChangeHistory, ResizeHandle,
-        TableResizeHandleRect, TableResizeKind, ThemeMode,
+        ActiveHeaderFooter, CanvasState, ChangeHistory, ResizeHandle, TableResizeHandleRect,
+        TableResizeKind, ThemeMode,
     },
-    document::{
-        CharacterStyle, DocumentState, TextRun, WrapMode,
-    },
+    document::{CharacterStyle, DocumentState, TextRun, WrapMode},
     grammar::GrammarError,
     layout::{
         centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
@@ -35,19 +34,21 @@ use crate::{
 
 use editor_input::{apply_viewport_input, handle_keyboard_input, handle_pointer_interaction};
 use image::{
-    handle_image_interaction, image_body_hit, image_handle_hit,
-    paint_image_on_page, paint_image_selection,
+    handle_image_interaction, image_body_hit, image_handle_hit, paint_image_on_page,
+    paint_image_selection,
 };
 use page_layout::{layout_page_stack, PageLayout};
 use palette::canvas_palette;
 use table::{
-    handle_table_interaction, paint_table, table_cell_hit,
-    table_resize_handle_hit, TablePaintParams,
+    handle_table_interaction, paint_table, table_cell_hit, table_resize_handle_hit,
+    TablePaintParams,
 };
 
-pub(crate) use layout::layout_document;
+use header_footer::{
+    header_footer_hit, paint_active_header_footer_editor, paint_page_header_footer,
+};
 pub(crate) use image_wrap::ImageLayout;
-use header_footer::{paint_page_header_footer, header_footer_hit, paint_active_header_footer_editor};
+pub(crate) use layout::layout_document;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CanvasOutput {
@@ -114,22 +115,34 @@ pub fn paint_document_canvas(
             output.text_changed = true;
             let dl2 = layout_document(ui, document, canvas, content_size.x);
             let pl = layout_page_stack(
-                viewport, document, canvas,
-                &dl2.galley, &dl2.manual_page_break_rows, &dl2.paragraph_start_rows,
+                viewport,
+                document,
+                canvas,
+                &dl2.galley,
+                &dl2.manual_page_break_rows,
+                &dl2.paragraph_start_rows,
             );
             (dl2, pl)
         } else {
             let pl = layout_page_stack(
-                viewport, document, canvas,
-                &dl.galley, &dl.manual_page_break_rows, &dl.paragraph_start_rows,
+                viewport,
+                document,
+                canvas,
+                &dl.galley,
+                &dl.manual_page_break_rows,
+                &dl.paragraph_start_rows,
             );
             (dl, pl)
         }
     } else {
         let dl = layout_document(ui, document, canvas, content_size.x);
         let pl = layout_page_stack(
-            viewport, document, canvas,
-            &dl.galley, &dl.manual_page_break_rows, &dl.paragraph_start_rows,
+            viewport,
+            document,
+            canvas,
+            &dl.galley,
+            &dl.manual_page_break_rows,
+            &dl.paragraph_start_rows,
         );
         (dl, pl)
     };
@@ -486,7 +499,7 @@ pub fn paint_document_canvas(
                 caret_rect,
                 ui.input(|i| i.time) - canvas.last_interaction_time,
             );
-            
+
             if canvas.ai_working {
                 let spinner_rect = egui::Rect::from_min_size(
                     caret_rect.max + egui::vec2(4.0, -caret_rect.height() * 0.8),
@@ -645,8 +658,6 @@ fn byte_to_char_index(text: &str, byte_offset: usize) -> usize {
         count
     }
 }
-
-
 
 fn runs_total_chars(runs: &[TextRun]) -> usize {
     runs.iter().map(|run| run.text.chars().count()).sum()

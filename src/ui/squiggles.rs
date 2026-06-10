@@ -51,7 +51,8 @@ pub fn paint_grammar_squiggles(
                     ui.separator();
 
                     for replacement in error.replacements.iter().take(5) {
-                        if ui.button(replacement).clicked() {
+                        let btn = egui::Button::selectable(false, replacement);
+                        if ui.add_sized([ui.available_width(), 0.0], btn).clicked() {
                             selected_replacement = Some(ReplacementAction {
                                 byte_start: error.byte_start,
                                 byte_end: error.byte_end,

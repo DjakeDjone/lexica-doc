@@ -9,8 +9,8 @@ mod table;
 mod text;
 mod types;
 
-pub use types::*;
 pub use table::{DocumentTable, TableBorders, TableCell};
+pub use types::*;
 
 impl DocumentState {
     pub fn bootstrap() -> Self {
@@ -71,4 +71,3 @@ impl DocumentState {
 
 #[cfg(test)]
 mod tests;
-

@@ -6,9 +6,9 @@ use std::{
 use super::{
     empty_header_footer_runs, export::plain_text_from_runs, text_format, CharacterStyle,
     DocumentImage, DocumentState, FontChoice, HeaderFooterKind, HeaderFooterStory,
-    HeaderFooterVariant, ImageLayoutMode, ImageRendering, ListKind, TextRun, WrapMode,
-    DOCX_BODY_BOLD, DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD, OBJECT_REPLACEMENT_CHAR,
-    ParagraphStyle,
+    HeaderFooterVariant, ImageLayoutMode, ImageRendering, ListKind, ParagraphStyle, TextRun,
+    WrapMode, DOCX_BODY_BOLD, DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD,
+    OBJECT_REPLACEMENT_CHAR,
 };
 
 fn test_image(id: usize) -> DocumentImage {
@@ -501,12 +501,13 @@ fn exports_pdf_html_with_pdf_friendly_css() {
     );
 
     let html = document.to_pdf_html();
-    assert!(html.contains("font-family: Helvetica, Arial, sans-serif"));
+    assert!(html.contains("font-family: 'LiberationSans-Regular'"));
     assert!(html.contains("font-size:"));
     assert!(html.contains("px"));
-    assert!(html.contains("<strong>"));
+    assert!(html.contains("font-weight:bold;"));
     assert!(!html.contains("box-shadow"));
 }
+
 
 #[test]
 fn saves_pdf_extension() {
@@ -526,4 +527,27 @@ fn saves_pdf_extension() {
     assert!(bytes.starts_with(b"%PDF"));
 
     let _ = fs::remove_file(path);
+}
+
+#[test]
+fn test_print_html_css() {
+    let mut doc = DocumentState::bootstrap();
+    let style = CharacterStyle {
+        bold: true,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        font_size_points: 11.5,
+        font_choice: FontChoice::Proportional,
+        font_family_name: Some("Carlito"),
+        text_color: eframe::egui::Color32::from_rgb(36, 39, 46),
+        highlight_color: eframe::egui::Color32::TRANSPARENT,
+    };
+    doc.runs.push(TextRun {
+        text: "Einzug: ".to_string(),
+        style,
+    });
+    doc.paragraph_styles.insert(0, ParagraphStyle::default());
+    let html = doc.to_pdf_html();
+    println!("DUMP HTML:\n{}", html);
 }

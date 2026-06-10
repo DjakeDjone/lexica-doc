@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::document::{DocumentState, FontChoice, ListKind, ParagraphAlignment};
+use super::common::{alignment_button, format_button, ribbon_group};
 use crate::app::{
     actions::{
         set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment,
@@ -10,7 +10,7 @@ use crate::app::{
     palette::{theme_switch, ThemeMode, ThemePalette},
     CanvasState, ChangeHistory,
 };
-use super::common::{alignment_button, format_button, ribbon_group};
+use crate::document::{DocumentState, FontChoice, ListKind, ParagraphAlignment};
 
 pub(crate) fn ribbon_font_group(
     ui: &mut egui::Ui,

@@ -216,18 +216,15 @@ pub(crate) fn run_style_css(style: CharacterStyle) -> String {
 }
 
 pub(crate) fn run_style_css_pdf(style: CharacterStyle) -> String {
-    let font_points = if style.bold {
-        style.font_size_points + 0.8
-    } else {
-        style.font_size_points
-    };
-
     let mut css = format!(
-        "font-family:{};font-size:{:.2}px;color:{};",
-        css_font_family(style),
-        points_to_css_px(font_points.max(1.0)),
+        "white-space:pre-wrap;font-family:'{}';font-size:{:.2}px;color:{};",
+        css_font_family_pdf(style),
+        points_to_css_px(style.font_size_points.max(1.0)),
         css_color_rgb(style.text_color)
     );
+    if style.bold {
+        css.push_str("font-weight:bold;");
+    }
     if style.italic {
         css.push_str("font-style:italic;");
     }
@@ -280,6 +277,28 @@ pub(crate) fn css_font_family(style: CharacterStyle) -> String {
                 "\"Liberation Mono\", \"Courier New\", Consolas, monospace".to_owned()
             }
             FontChoice::ComicSans => "\"Comic Neue\", \"Comic Sans MS\", cursive".to_owned(),
+        },
+    }
+}
+
+pub(crate) fn css_font_family_pdf(style: CharacterStyle) -> String {
+    let suffix = if style.bold { "-Bold" } else { "-Regular" };
+    match style.font_family_name {
+        Some("docx-carlito") => format!("Carlito{}", suffix),
+        Some("docx-caladea") => format!("Caladea{}", suffix),
+        Some("docx-liberation-sans") => format!("LiberationSans{}", suffix),
+        Some("docx-liberation-serif") => format!("LiberationSerif{}", suffix),
+        Some("docx-liberation-mono") => format!("LiberationMono{}", suffix),
+        Some("docx-comic-sans") => format!("ComicNeue{}", suffix),
+        Some(_) => format!("LiberationSans{}", suffix),
+        None => match style.font_choice {
+            FontChoice::Monospace => format!("LiberationMono{}", suffix),
+            FontChoice::Carlito => format!("Carlito{}", suffix),
+            FontChoice::Caladea => format!("Caladea{}", suffix),
+            FontChoice::LiberationSerif => format!("LiberationSerif{}", suffix),
+            FontChoice::LiberationMono => format!("LiberationMono{}", suffix),
+            FontChoice::ComicSans => format!("ComicNeue{}", suffix),
+            _ => format!("LiberationSans{}", suffix),
         },
     }
 }
@@ -375,7 +394,28 @@ pub(crate) fn html_escape(text: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&#39;"),
-            _ => out.push(ch),
+            c if c.is_ascii() => out.push(c),
+            c => {
+                let _ = write!(out, "&#{};", c as u32);
+            }
+        }
+    }
+    out
+}
+
+/// HTML escape for PDF export: keeps non-ASCII characters as raw UTF-8
+/// because printpdf's HTML parser doesn't properly decode numeric HTML entities,
+/// but the embedded TTF fonts handle Unicode glyphs directly.
+pub(crate) fn html_escape_pdf(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
         }
     }
     out

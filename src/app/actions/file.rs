@@ -8,7 +8,6 @@ use rfd::FileDialog;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast as _, JsValue};
 
-
 use crate::app::{CanvasState, ChangeHistory};
 use crate::document::DocumentState;
 #[cfg(not(target_arch = "wasm32"))]
@@ -20,8 +19,9 @@ pub fn open_document(
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
     history: &mut ChangeHistory,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
 ) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -99,8 +99,9 @@ pub fn save_document(
     document: &DocumentState,
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
 ) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -148,8 +149,9 @@ pub fn save_document_as(
     document: &DocumentState,
     status_message: &mut String,
     current_path: &mut Option<PathBuf>,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
 ) -> Option<PathBuf> {
     #[cfg(target_arch = "wasm32")]
     {
@@ -181,8 +183,9 @@ pub fn save_document_as_with_name(
     current_path: &mut Option<PathBuf>,
     file_name: &str,
     extension: &str,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
 ) -> Option<PathBuf> {
     let suggested_name = suggested_save_name(file_name, extension);
 
@@ -208,7 +211,6 @@ pub fn save_document_as_with_name(
         None
     }
 }
-
 
 #[cfg(not(target_arch = "wasm32"))]
 fn pick_save_path_with_file_name(file_name: &str) -> Option<PathBuf> {

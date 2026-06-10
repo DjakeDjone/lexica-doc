@@ -1,10 +1,10 @@
-use std::ops::Range;
 use crate::document::text::char_to_byte_index;
 use crate::document::types::{
     append_text_run, CharacterStyle, DistanceFromText, DocumentImage, DocumentState,
     HorizontalPosition, ImageLayoutMode, ImageRendering, ListKind, Paragraph, ParagraphStyle,
     TextRun, VerticalPosition, WrapMode, OBJECT_REPLACEMENT_CHAR,
 };
+use std::ops::Range;
 
 impl DocumentState {
     pub fn insert_text(&mut self, char_index: usize, text: &str, style: CharacterStyle) {
@@ -516,7 +516,6 @@ impl DocumentState {
 
         paragraph_max.max(table_max) + 1
     }
-
 
     fn replace_paragraphs(&mut self, paragraphs: Vec<Paragraph>) {
         let mut runs = Vec::new();

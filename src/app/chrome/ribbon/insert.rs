@@ -1,11 +1,12 @@
 use eframe::egui;
 
-use crate::document::{DocumentState, HeaderFooterKind, HeaderFooterVariant, TextRun};
+use super::common::ribbon_group;
 use crate::app::{
     actions::{insert_image, insert_page_break, insert_section_break, insert_table},
-    ActiveHeaderFooter, CanvasState, ChangeHistory, palette::ThemePalette,
+    palette::ThemePalette,
+    ActiveHeaderFooter, CanvasState, ChangeHistory,
 };
-use super::common::ribbon_group;
+use crate::document::{DocumentState, HeaderFooterKind, HeaderFooterVariant, TextRun};
 
 pub(crate) fn ribbon_insert_group(
     ui: &mut egui::Ui,
@@ -13,8 +14,9 @@ pub(crate) fn ribbon_insert_group(
     canvas: &mut CanvasState,
     status_message: &mut String,
     history: &mut ChangeHistory,
-    #[cfg(not(target_arch = "wasm32"))]
-    dialog_tx: &std::sync::mpsc::Sender<crate::app::DialogAction>,
+    #[cfg(not(target_arch = "wasm32"))] dialog_tx: &std::sync::mpsc::Sender<
+        crate::app::DialogAction,
+    >,
     palette: ThemePalette,
 ) {
     ribbon_group(ui, "Insert", palette, |ui| {

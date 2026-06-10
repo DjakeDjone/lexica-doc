@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use eframe::egui::{self, Color32, FontId};
+use std::sync::Arc;
 
 use crate::app::CanvasState;
 use crate::document::{
@@ -104,7 +104,9 @@ pub fn layout_document(
         let ai_completion = canvas.ai_completion.as_deref();
 
         if paragraph.runs.is_empty() {
-            if let Some(completion) = ai_completion.filter(|_| paragraph.range.start == cursor_index) {
+            if let Some(completion) =
+                ai_completion.filter(|_| paragraph.range.start == cursor_index)
+            {
                 let ghost_style = CharacterStyle {
                     text_color: egui::Color32::GRAY.gamma_multiply(0.8),
                     highlight_color: Color32::TRANSPARENT,
@@ -119,7 +121,9 @@ pub fn layout_document(
             for run in &paragraph.runs {
                 let run_len = run.text.chars().count();
                 if let Some(completion) = ai_completion {
-                    if current_char_index <= cursor_index && cursor_index <= current_char_index + run_len {
+                    if current_char_index <= cursor_index
+                        && cursor_index <= current_char_index + run_len
+                    {
                         let split_idx = cursor_index - current_char_index;
                         let before_text: String = run.text.chars().take(split_idx).collect();
                         let after_text: String = run.text.chars().skip(split_idx).collect();
@@ -127,7 +131,12 @@ pub fn layout_document(
                         if !before_text.is_empty() {
                             let mut before_run = run.clone();
                             before_run.text = before_text;
-                            append_run_with_placeholders(&mut job, &before_run, canvas.zoom, paragraph.image.is_some() && !has_visible_text);
+                            append_run_with_placeholders(
+                                &mut job,
+                                &before_run,
+                                canvas.zoom,
+                                paragraph.image.is_some() && !has_visible_text,
+                            );
                         }
 
                         let ghost_style = CharacterStyle {
@@ -140,13 +149,28 @@ pub fn layout_document(
                         if !after_text.is_empty() {
                             let mut after_run = run.clone();
                             after_run.text = after_text;
-                            append_run_with_placeholders(&mut job, &after_run, canvas.zoom, paragraph.image.is_some() && !has_visible_text);
+                            append_run_with_placeholders(
+                                &mut job,
+                                &after_run,
+                                canvas.zoom,
+                                paragraph.image.is_some() && !has_visible_text,
+                            );
                         }
                     } else {
-                        append_run_with_placeholders(&mut job, run, canvas.zoom, paragraph.image.is_some() && !has_visible_text);
+                        append_run_with_placeholders(
+                            &mut job,
+                            run,
+                            canvas.zoom,
+                            paragraph.image.is_some() && !has_visible_text,
+                        );
                     }
                 } else {
-                    append_run_with_placeholders(&mut job, run, canvas.zoom, paragraph.image.is_some() && !has_visible_text);
+                    append_run_with_placeholders(
+                        &mut job,
+                        run,
+                        canvas.zoom,
+                        paragraph.image.is_some() && !has_visible_text,
+                    );
                 }
                 current_char_index += run_len;
             }
@@ -172,16 +196,14 @@ pub fn layout_document(
                 .sum();
             let table_size = egui::vec2(table_width.min(paragraph_wrap_width), table_height);
             if reserve_block_image_space(&mut paragraph_galley, table_size) {
-                tables.push(TableLayout {
-                    row_index,
-                    table,
-                });
+                tables.push(TableLayout { row_index, table });
             }
         } else if let Some(image) = paragraph.image.clone().filter(|_| !has_visible_text) {
             let wrap_mode = image.wrap_mode;
             let image_offset_x_points = image.offset_x_points();
             let image_offset_y_points = image.offset_y_points();
-            let display_size = super::image::image_display_size(&image, paragraph_wrap_width, canvas.zoom);
+            let display_size =
+                super::image::image_display_size(&image, paragraph_wrap_width, canvas.zoom);
             let reservation =
                 block_image_reservation(wrap_mode, display_size, paragraph_wrap_width, canvas.zoom);
             if reserve_block_image_space(&mut paragraph_galley, reservation.row_size) {

@@ -1,11 +1,12 @@
 use eframe::egui;
 
-use crate::document::{DocumentState, ImageLayoutMode, ImageRendering, WrapMode};
+use super::common::{format_button, ribbon_group, ribbon_info_group};
 use crate::app::{
     actions::{reset_image_size, set_image_opacity, set_image_rendering, set_image_wrap_mode},
-    CanvasState, ChangeHistory, palette::ThemePalette,
+    palette::ThemePalette,
+    CanvasState, ChangeHistory,
 };
-use super::common::{format_button, ribbon_group, ribbon_info_group};
+use crate::document::{DocumentState, ImageLayoutMode, ImageRendering, WrapMode};
 
 pub(crate) fn ribbon_picture_group(
     ui: &mut egui::Ui,

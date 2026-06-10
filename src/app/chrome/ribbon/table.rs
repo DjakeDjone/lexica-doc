@@ -1,11 +1,12 @@
 use eframe::egui;
 
-use crate::document::DocumentState;
+use super::common::{ribbon_group, ribbon_info_group};
 use crate::app::{
     actions::{delete_table_column, delete_table_row, insert_table_column, insert_table_row},
-    CanvasState, ChangeHistory, palette::ThemePalette,
+    palette::ThemePalette,
+    CanvasState, ChangeHistory,
 };
-use super::common::{ribbon_group, ribbon_info_group};
+use crate::document::DocumentState;
 
 pub(crate) fn table_format_group(
     ui: &mut egui::Ui,

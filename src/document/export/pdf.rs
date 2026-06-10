@@ -6,18 +6,16 @@ use printpdf::{
     PdfSaveOptions, Point, Pt, TextItem,
 };
 
-use crate::document::{
-    DocumentState, HeaderFooterKind, ListKind, OBJECT_REPLACEMENT_CHAR,
-};
 use super::{
-    html_escape, image_mime_type, image_position_css_pdf, line_spacing_css_pdf,
-    paragraph_alignment_css, points_to_css_px, points_to_mm, run_style_css_pdf,
-    wrap_text_for_pdf,
+    html_escape_pdf, image_mime_type, image_position_css_pdf, line_spacing_css_pdf,
+    paragraph_alignment_css, points_to_css_px, points_to_mm, run_style_css_pdf, wrap_text_for_pdf,
 };
+use crate::document::{DocumentState, HeaderFooterKind, ListKind, OBJECT_REPLACEMENT_CHAR};
 
 impl DocumentState {
     pub(crate) fn to_pdf_bytes(&self) -> Result<Vec<u8>, String> {
         let html = self.to_pdf_html();
+        eprintln!("PDF EXPORT MARGINS: {:?}", self.margins);
         let options = GeneratePdfOptions {
             page_width: Some(points_to_mm(self.page_size.width_points)),
             page_height: Some(points_to_mm(self.page_size.height_points)),
@@ -28,14 +26,29 @@ impl DocumentState {
             ..GeneratePdfOptions::default()
         };
         let images: BTreeMap<String, Base64OrRaw> = BTreeMap::new();
-        let fonts: BTreeMap<String, Base64OrRaw> = BTreeMap::new();
+        let mut fonts: BTreeMap<String, Base64OrRaw> = BTreeMap::new();
+        fonts.insert("Carlito-Regular".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/Carlito-Regular.ttf").to_vec()));
+        fonts.insert("Carlito-Bold".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/Carlito-Bold.ttf").to_vec()));
+        fonts.insert("Caladea-Regular".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/Caladea-Regular.ttf").to_vec()));
+        fonts.insert("Caladea-Bold".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/Caladea-Bold.ttf").to_vec()));
+        fonts.insert("LiberationSans-Regular".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/LiberationSans-Regular.ttf").to_vec()));
+        fonts.insert("LiberationSans-Bold".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/LiberationSans-Bold.ttf").to_vec()));
+        fonts.insert("LiberationSerif-Regular".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/LiberationSerif-Regular.ttf").to_vec()));
+        fonts.insert("LiberationSerif-Bold".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/LiberationSerif-Bold.ttf").to_vec()));
+        fonts.insert("LiberationMono-Regular".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/LiberationMono-Regular.ttf").to_vec()));
+        fonts.insert("LiberationMono-Bold".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/LiberationMono-Bold.ttf").to_vec()));
+        fonts.insert("ComicNeue-Regular".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/ComicNeue-Regular.ttf").to_vec()));
+        fonts.insert("ComicNeue-Bold".to_owned(), Base64OrRaw::Raw(include_bytes!("../../../assets/fonts/ComicNeue-Bold.ttf").to_vec()));
 
         let mut warnings = Vec::new();
         let mut rendered = PdfDocument::from_html(&html, &images, &fonts, &options, &mut warnings)
             .map_err(|error| format!("failed to render PDF: {error}"))?;
         rendered.metadata.info.document_title = self.title.clone();
         rendered.metadata.info.conformance = Default::default();
+        println!("PDF HTML render produced {} pages", rendered.pages.len());
+        println!("PDF HTML render warnings: {:?}", warnings);
         if rendered.pages.is_empty() {
+            println!("Falling back to plain text PDF bytes.");
             return Ok(self.to_plain_text_pdf_bytes());
         }
         self.stamp_pdf_header_footer(&mut rendered);
@@ -45,48 +58,79 @@ impl DocumentState {
 
     pub(crate) fn to_pdf_html(&self) -> String {
         let mut html = String::new();
+        let mut custom_css = String::new();
+
+        // Pass 1: Generate CSS classes for every styled element
+        for (i, paragraph) in self.paragraphs().iter().enumerate() {
+            let padding_left = if paragraph.list_marker.is_some() {
+                24.0 // match marker_gutter in layout.rs
+            } else {
+                0.0
+            };
+            
+            let p_css = format!(
+                "text-align:{};margin-top:{:.2}px;margin-bottom:{:.2}px;line-height:{};padding-left:{:.2}px;",
+                paragraph_alignment_css(paragraph.style.alignment),
+                points_to_css_px(paragraph.style.spacing_before_points as f32),
+                points_to_css_px(paragraph.style.spacing_after_points as f32),
+                line_spacing_css_pdf(paragraph.style.line_spacing),
+                points_to_css_px(padding_left)
+            );
+            let _ = write!(custom_css, ".p-{} {{ {} }}\n", i, p_css);
+
+            for (j, run) in paragraph.runs.iter().enumerate() {
+                let s_css = run_style_css_pdf(run.style);
+                let _ = write!(custom_css, ".s-{}-{} {{ {} }}\n", i, j, s_css);
+            }
+
+            if let Some(image) = paragraph.image.as_ref() {
+                let img_css = format!(
+                    "width:{:.2}px;height:{:.2}px;opacity:{:.3};{}",
+                    points_to_css_px(image.width_points),
+                    points_to_css_px(image.height_points),
+                    image.opacity.clamp(0.0, 1.0),
+                    image_position_css_pdf(image)
+                );
+                let _ = write!(custom_css, ".img-{} {{ {} }}\n", i, img_css);
+            }
+        }
+
         let _ = write!(
             html,
-            "<!doctype html>\
-<html lang=\"en\">\
+            "<html lang=\"en\">\
 <head>\
-<meta charset=\"utf-8\">\
-<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<meta charset=\"utf-8\" />\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\
 <title>{}</title>\
 <style>\
-body {{ margin: 0; padding: 0; color: #24272e; font-family: Helvetica, Arial, sans-serif; }}\
+body {{ margin: 0; padding: 0; color: #24272e; font-family: 'LiberationSans-Regular'; }}\
 p {{ margin: 0; white-space: pre-wrap; }}\
 .page-break {{ break-before: page; page-break-before: always; height: 0; }}\
 .image-block {{ display: block; max-width: 100%; }}\
-</style>\
+{}</style>\
 </head>\
 <body>",
-            html_escape(&self.title)
+            html_escape_pdf(&self.title),
+            custom_css
         );
 
-        for paragraph in self.paragraphs() {
+        // Pass 2: Generate HTML body using the generated classes
+        for (i, paragraph) in self.paragraphs().iter().enumerate() {
             if paragraph.style.page_break_before {
                 html.push_str("<div class=\"page-break\"></div>");
             }
 
-            let _ = write!(
-                html,
-                "<p style=\"text-align:{};margin-top:{:.2}px;margin-bottom:{:.2}px;{}\">",
-                paragraph_alignment_css(paragraph.style.alignment),
-                points_to_css_px(paragraph.style.spacing_before_points as f32),
-                points_to_css_px(paragraph.style.spacing_after_points as f32),
-                line_spacing_css_pdf(paragraph.style.line_spacing)
-            );
+            let _ = write!(html, "<p class=\"p-{}\">", i);
 
-            if let Some(marker) = paragraph.list_marker {
+            if let Some(marker) = &paragraph.list_marker {
                 let prefix = match paragraph.style.list_kind {
                     ListKind::Bullet | ListKind::Ordered => format!("{marker} "),
                     ListKind::None => String::new(),
                 };
-                html.push_str(&html_escape(&prefix));
+                html.push_str(&html_escape_pdf(&prefix));
             }
 
-            for run in paragraph.runs {
+            for (j, run) in paragraph.runs.iter().enumerate() {
                 let text: String = run
                     .text
                     .chars()
@@ -96,25 +140,8 @@ p {{ margin: 0; white-space: pre-wrap; }}\
                     continue;
                 }
 
-                let escaped = html_escape(&text);
-                let mut run_html = format!(
-                    "<span style=\"{}\">{escaped}</span>",
-                    run_style_css_pdf(run.style)
-                );
-                if run.style.bold {
-                    run_html = format!("<strong>{run_html}</strong>");
-                }
-                if run.style.italic {
-                    run_html = format!("<em>{run_html}</em>");
-                }
-                if run.style.underline {
-                    run_html =
-                        format!("<span style=\"text-decoration:underline;\">{run_html}</span>");
-                }
-                if run.style.strikethrough {
-                    run_html =
-                        format!("<span style=\"text-decoration:line-through;\">{run_html}</span>");
-                }
+                let escaped = html_escape_pdf(&text);
+                let run_html = format!("<span class=\"s-{}-{}\">{escaped}</span>", i, j);
                 html.push_str(&run_html);
             }
 
@@ -122,14 +149,11 @@ p {{ margin: 0; white-space: pre-wrap; }}\
                 if let Some(mime_type) = image_mime_type(&image.bytes) {
                     let _ = write!(
                         html,
-                        "<img class=\"image-block\" alt=\"{}\" src=\"data:{};base64,{}\" style=\"width:{:.2}px;height:{:.2}px;opacity:{:.3};{}\" />",
-                        html_escape(&image.alt_text),
+                        "<img class=\"image-block img-{}\" alt=\"{}\" src=\"data:{};base64,{}\" />",
+                        i,
+                        html_escape_pdf(&image.alt_text),
                         mime_type,
-                        BASE64_STANDARD.encode(&image.bytes),
-                        points_to_css_px(image.width_points),
-                        points_to_css_px(image.height_points),
-                        image.opacity.clamp(0.0, 1.0),
-                        image_position_css_pdf(image)
+                        BASE64_STANDARD.encode(&image.bytes)
                     );
                 }
             }

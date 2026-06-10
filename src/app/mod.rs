@@ -12,11 +12,6 @@ use std::path::PathBuf;
 #[cfg(not(target_arch = "wasm32"))]
 use std::process::Child;
 
-use eframe::{egui, App, CreationContext, Frame};
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::sync::mpsc;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::grammar::task::{GrammarRequest, GrammarTaskResult};
 use crate::{
@@ -28,6 +23,11 @@ use crate::{
     },
     grammar::{GrammarConfig, GrammarError, GrammarStatus},
 };
+use eframe::{egui, App, CreationContext, Frame};
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::sync::mpsc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use actions::open_document_from_path;
@@ -51,9 +51,9 @@ const DOCX_LIBERATION_SANS: &str = "docx-liberation-sans";
 const DOCX_LIBERATION_SERIF: &str = "docx-liberation-serif";
 const DOCX_LIBERATION_MONO: &str = "docx-liberation-mono";
 const DOCX_COMIC_SANS: &str = "docx-comic-sans";
-use grammar::GrammarDownloadStatus;
 #[cfg(not(target_arch = "wasm32"))]
 use grammar::GrammarDownloadResult;
+use grammar::GrammarDownloadStatus;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub enum DialogAction {
@@ -280,7 +280,6 @@ impl WorsApp {
     }
 }
 
-
 fn configure_docx_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     register_font(
@@ -415,28 +414,27 @@ impl App for WorsApp {
                         &path,
                     ) {
                         self.remember_recent_file(path);
-                        self.backstage.open_save_as(&self.document, &self.current_path);
+                        self.backstage
+                            .open_save_as(&self.document, &self.current_path);
                         self.backstage.visible = false;
                     }
                 }
-                DialogAction::SaveDocument(path) => {
-                    match self.document.save_to_path(&path) {
-                        Ok(()) => {
-                            self.current_path = Some(path.clone());
-                            self.status_message = format!(
-                                "Saved {}",
-                                path.file_name()
-                                    .and_then(|name| name.to_str())
-                                    .unwrap_or("document")
-                            );
-                            self.remember_recent_file(path);
-                            self.backstage.visible = false;
-                        }
-                        Err(error) => {
-                            self.status_message = error;
-                        }
+                DialogAction::SaveDocument(path) => match self.document.save_to_path(&path) {
+                    Ok(()) => {
+                        self.current_path = Some(path.clone());
+                        self.status_message = format!(
+                            "Saved {}",
+                            path.file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("document")
+                        );
+                        self.remember_recent_file(path);
+                        self.backstage.visible = false;
                     }
-                }
+                    Err(error) => {
+                        self.status_message = error;
+                    }
+                },
                 DialogAction::InsertImage(path) => {
                     crate::app::actions::insert::finish_insert_image(
                         &mut self.document,
@@ -449,7 +447,8 @@ impl App for WorsApp {
             }
         }
 
-        let initial_settings = AppSettings::from_state(self.theme_mode, &self.canvas, self.ai_config.clone());
+        let initial_settings =
+            AppSettings::from_state(self.theme_mode, &self.canvas, self.ai_config.clone());
 
         let shortcut_changed = handle_global_shortcuts(
             ui,
@@ -469,7 +468,14 @@ impl App for WorsApp {
             )
         }) {
             self.ai_config.enable = !self.ai_config.enable;
-            self.status_message = format!("AI completions {}", if self.ai_config.enable { "enabled" } else { "disabled" });
+            self.status_message = format!(
+                "AI completions {}",
+                if self.ai_config.enable {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
         }
 
         let palette = theme_palette(self.theme_mode);
@@ -679,7 +685,7 @@ impl App for WorsApp {
         if shortcut_changed || canvas_output.text_changed {
             self.request_grammar_check(false);
         }
-            
+
         let current_cursor = self.canvas.selection.primary.index;
         if canvas_output.text_changed || self.last_cursor_index != current_cursor {
             self.last_cursor_index = current_cursor;
@@ -691,9 +697,17 @@ impl App for WorsApp {
                     let cursor_idx = self.canvas.selection.primary.index;
                     let text = self.document.plain_text();
                     let text_before = text.chars().take(cursor_idx).collect::<String>();
-                    let text_before_cursor = text_before.chars().rev().take(1000).collect::<Vec<_>>().into_iter().rev().collect();
-                    let text_after_cursor = text.chars().skip(cursor_idx).take(1000).collect::<String>();
-                    
+                    let text_before_cursor = text_before
+                        .chars()
+                        .rev()
+                        .take(1000)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    let text_after_cursor =
+                        text.chars().skip(cursor_idx).take(1000).collect::<String>();
+
                     let _ = tx.try_send(crate::ai::task::AiRequest {
                         text_before_cursor,
                         text_after_cursor,
@@ -790,7 +804,8 @@ impl App for WorsApp {
             }
         }
 
-        let current_settings = AppSettings::from_state(self.theme_mode, &self.canvas, self.ai_config.clone());
+        let current_settings =
+            AppSettings::from_state(self.theme_mode, &self.canvas, self.ai_config.clone());
         if current_settings != initial_settings {
             if let Some(storage) = frame.storage_mut() {
                 save_settings(storage, current_settings);

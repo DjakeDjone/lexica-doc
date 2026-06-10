@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use quick_xml::{events::Event as XmlEvent, Reader};
 
-use crate::document::ListKind;
 use super::{attr_value, local_name};
+use crate::document::ListKind;
 
 #[derive(Default)]
 pub(crate) struct NumberingDefinitions {
