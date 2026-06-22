@@ -3,7 +3,7 @@ use eframe::egui;
 use crate::app::{ActiveHeaderFooter, CanvasState, ChangeHistory};
 use crate::document::{
     CharacterStyle, DocumentState, FontChoice, ListKind, ParagraphAlignment, ParagraphStyle,
-    TextRun,
+    TextRun, VerticalAlign,
 };
 
 pub fn toggle_bold(
@@ -45,6 +45,38 @@ pub fn toggle_strikethrough(
     let next_value = !canvas.active_style.strikethrough;
     apply_selection_or_active_style(document, canvas, move |style| {
         style.strikethrough = next_value
+    });
+}
+
+pub fn toggle_superscript(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+) {
+    history.checkpoint(document, f64::NAN);
+    let next_value = if canvas.active_style.vertical_align == VerticalAlign::Superscript {
+        VerticalAlign::Baseline
+    } else {
+        VerticalAlign::Superscript
+    };
+    apply_selection_or_active_style(document, canvas, move |style| {
+        style.vertical_align = next_value
+    });
+}
+
+pub fn toggle_subscript(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    history: &mut ChangeHistory,
+) {
+    history.checkpoint(document, f64::NAN);
+    let next_value = if canvas.active_style.vertical_align == VerticalAlign::Subscript {
+        VerticalAlign::Baseline
+    } else {
+        VerticalAlign::Subscript
+    };
+    apply_selection_or_active_style(document, canvas, move |style| {
+        style.vertical_align = next_value
     });
 }
 

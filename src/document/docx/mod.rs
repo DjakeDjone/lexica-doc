@@ -81,7 +81,7 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
         &media,
     )?;
     imported.different_odd_even_pages = different_odd_even_pages;
-    
+
     // We expect parse_document_xml to populate imported.raw_sections.
     // Let's build imported.sections from them!
     for (i, raw) in imported.raw_sections.iter().enumerate() {
@@ -92,13 +92,20 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
         if let Some(margins) = raw.margins.or(imported.margins) {
             setup.margins = margins;
         }
-        
+
         let mut hf = crate::document::SectionHeaderFooter::empty(i > 0);
-        
+
         for (kind, id) in &raw.header_refs {
             if let Some(target) = relationships.header_targets.get(id) {
                 if let Some(xml) = header_footer_store.get(target) {
-                    let story = parse_header_footer(xml, &numbering, &styles, &theme_fonts, &relationships, &media);
+                    let story = parse_header_footer(
+                        xml,
+                        &numbering,
+                        &styles,
+                        &theme_fonts,
+                        &relationships,
+                        &media,
+                    );
                     let variant = match kind.as_str() {
                         "first" => crate::document::HeaderFooterVariant::First,
                         "even" => crate::document::HeaderFooterVariant::Even,
@@ -110,11 +117,18 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
                 }
             }
         }
-        
+
         for (kind, id) in &raw.footer_refs {
             if let Some(target) = relationships.footer_targets.get(id) {
                 if let Some(xml) = header_footer_store.get(target) {
-                    let story = parse_header_footer(xml, &numbering, &styles, &theme_fonts, &relationships, &media);
+                    let story = parse_header_footer(
+                        xml,
+                        &numbering,
+                        &styles,
+                        &theme_fonts,
+                        &relationships,
+                        &media,
+                    );
                     let variant = match kind.as_str() {
                         "first" => crate::document::HeaderFooterVariant::First,
                         "even" => crate::document::HeaderFooterVariant::Even,
@@ -126,7 +140,7 @@ pub fn docx_to_document(bytes: &[u8]) -> Result<ImportedDocx, String> {
                 }
             }
         }
-        
+
         imported.sections.push(Section {
             id: i + 1,
             starts_at_paragraph: raw.starts_at_paragraph,
@@ -157,7 +171,9 @@ fn parse_header_footer(
     relationships: &DocumentRelationships,
     media: &HashMap<String, Vec<u8>>,
 ) -> crate::document::HeaderFooterStory {
-    if let Ok(imported) = parse_document_xml(xml, numbering, styles, theme_fonts, relationships, media) {
+    if let Ok(imported) =
+        parse_document_xml(xml, numbering, styles, theme_fonts, relationships, media)
+    {
         // Strip out the trailing newline added by default if it's empty
         if imported.runs.len() == 1 && imported.runs[0].text.is_empty() {
             crate::document::HeaderFooterStory::empty()
@@ -175,7 +191,11 @@ fn load_header_footer_store(
 ) -> Result<HashMap<String, String>, String> {
     let mut store = HashMap::new();
 
-    for target in relationships.header_targets.values().chain(relationships.footer_targets.values()) {
+    for target in relationships
+        .header_targets
+        .values()
+        .chain(relationships.footer_targets.values())
+    {
         let Ok(mut file) = archive.by_name(target) else {
             continue;
         };
@@ -387,6 +407,10 @@ pub(crate) fn parse_document_xml(
                         !matches!(attr_value(&event, b"val").as_deref(), Some("none"))
                 }
                 b"strike" | b"dstrike" => run_style.strikethrough = docx_flag(&event, true),
+                b"vertAlign" => {
+                    run_style.vertical_align =
+                        vertical_align_for(attr_value(&event, b"val").as_deref())
+                }
                 b"sz" => {
                     if let Some(value) = attr_value(&event, b"val") {
                         if let Ok(half_points) = value.parse::<f32>() {
@@ -419,12 +443,16 @@ pub(crate) fn parse_document_xml(
                 b"pgMar" => margins = parse_page_margins(&event),
                 b"titlePg" => different_first_page = true,
                 b"headerReference" => {
-                    if let (Some(rel_id), Some(kind)) = (attr_value(&event, b"id"), attr_value(&event, b"type")) {
+                    if let (Some(rel_id), Some(kind)) =
+                        (attr_value(&event, b"id"), attr_value(&event, b"type"))
+                    {
                         current_header_refs.push((kind, rel_id));
                     }
                 }
                 b"footerReference" => {
-                    if let (Some(rel_id), Some(kind)) = (attr_value(&event, b"id"), attr_value(&event, b"type")) {
+                    if let (Some(rel_id), Some(kind)) =
+                        (attr_value(&event, b"id"), attr_value(&event, b"type"))
+                    {
                         current_footer_refs.push((kind, rel_id));
                     }
                 }
@@ -524,6 +552,10 @@ pub(crate) fn parse_document_xml(
                         !matches!(attr_value(&event, b"val").as_deref(), Some("none"))
                 }
                 b"strike" | b"dstrike" => run_style.strikethrough = docx_flag(&event, true),
+                b"vertAlign" => {
+                    run_style.vertical_align =
+                        vertical_align_for(attr_value(&event, b"val").as_deref())
+                }
                 b"sz" => {
                     if let Some(value) = attr_value(&event, b"val") {
                         if let Ok(half_points) = value.parse::<f32>() {
@@ -556,12 +588,16 @@ pub(crate) fn parse_document_xml(
                 b"pgMar" => margins = parse_page_margins(&event),
                 b"titlePg" => different_first_page = true,
                 b"headerReference" => {
-                    if let (Some(rel_id), Some(kind)) = (attr_value(&event, b"id"), attr_value(&event, b"type")) {
+                    if let (Some(rel_id), Some(kind)) =
+                        (attr_value(&event, b"id"), attr_value(&event, b"type"))
+                    {
                         current_header_refs.push((kind, rel_id));
                     }
                 }
                 b"footerReference" => {
-                    if let (Some(rel_id), Some(kind)) = (attr_value(&event, b"id"), attr_value(&event, b"type")) {
+                    if let (Some(rel_id), Some(kind)) =
+                        (attr_value(&event, b"id"), attr_value(&event, b"type"))
+                    {
                         current_footer_refs.push((kind, rel_id));
                     }
                 }

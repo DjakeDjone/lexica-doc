@@ -1,4 +1,4 @@
-use eframe::egui::{epaint::text::TextFormat, Color32, FontFamily, FontId, Stroke};
+use eframe::egui::{epaint::text::TextFormat, Align, Color32, FontFamily, FontId, Stroke};
 use serde::Serialize;
 use std::ops::Range;
 
@@ -164,12 +164,20 @@ pub(crate) fn serialize_color32<S: serde::Serializer>(
     ))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub enum VerticalAlign {
+    Baseline,
+    Superscript,
+    Subscript,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct CharacterStyle {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
+    pub vertical_align: VerticalAlign,
     pub font_size_points: f32,
     pub font_choice: FontChoice,
     pub font_family_name: Option<&'static str>,
@@ -186,6 +194,7 @@ impl Default for CharacterStyle {
             italic: false,
             underline: false,
             strikethrough: false,
+            vertical_align: VerticalAlign::Baseline,
             font_size_points: 12.0,
             font_choice: FontChoice::Proportional,
             font_family_name: None,
@@ -768,7 +777,10 @@ pub(crate) fn plain_text_from_runs(runs: &[TextRun]) -> String {
 
 pub(crate) fn text_format(style: CharacterStyle, zoom: f32) -> TextFormat {
     let line_color = style.text_color;
-    let font_size = style.font_size_points * zoom;
+    let font_size = match style.vertical_align {
+        VerticalAlign::Baseline => style.font_size_points,
+        VerticalAlign::Superscript | VerticalAlign::Subscript => style.font_size_points * 0.65,
+    } * zoom;
     let family = text_font_family(style);
 
     TextFormat {
@@ -785,6 +797,10 @@ pub(crate) fn text_format(style: CharacterStyle, zoom: f32) -> TextFormat {
             Stroke::new(1.0, line_color)
         } else {
             Stroke::NONE
+        },
+        valign: match style.vertical_align {
+            VerticalAlign::Baseline | VerticalAlign::Subscript => Align::BOTTOM,
+            VerticalAlign::Superscript => Align::TOP,
         },
         ..Default::default()
     }

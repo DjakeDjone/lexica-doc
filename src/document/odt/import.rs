@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::document::{
     CharacterStyle, DocumentImage, DocumentTable, FontChoice, ImageLayoutMode, ImageRendering,
     LineSpacing, LineSpacingKind, ListKind, PageMargins, PageSize, ParagraphAlignment,
-    ParagraphStyle, TableCell, TextRun, WrapMode, OBJECT_REPLACEMENT_CHAR,
+    ParagraphStyle, TableCell, TextRun, VerticalAlign, WrapMode, OBJECT_REPLACEMENT_CHAR,
 };
 
 #[derive(Debug, Serialize)]
@@ -159,7 +159,7 @@ fn parse_content_xml(
                     in_list.push(kind);
                 }
                 b"table" => {
-                    let table = parse_odt_table(&mut reader, next_table_id)?;
+                    let table = parse_odt_table(&mut reader, styles, next_table_id)?;
                     next_table_id += 1;
                     push_paragraph(
                         &mut runs,
@@ -372,7 +372,11 @@ fn parse_frame_image(
     }))
 }
 
-fn parse_odt_table(reader: &mut Reader<&[u8]>, id: usize) -> Result<DocumentTable, String> {
+fn parse_odt_table(
+    reader: &mut Reader<&[u8]>,
+    styles: &OdtStyles,
+    id: usize,
+) -> Result<DocumentTable, String> {
     let mut rows = Vec::<Vec<TableCell>>::new();
     let mut current_row = Vec::<TableCell>::new();
     let mut current_cell_runs = Vec::<TextRun>::new();
@@ -389,7 +393,15 @@ fn parse_odt_table(reader: &mut Reader<&[u8]>, id: usize) -> Result<DocumentTabl
                     current_cell_runs.clear();
                 }
                 b"p" | b"h" if in_cell => in_cell_paragraph = true,
-                b"span" if in_cell_paragraph => style_stack.push(*style_stack.last().unwrap()),
+                b"span" if in_cell_paragraph => {
+                    let mut style = *style_stack.last().unwrap_or(&CharacterStyle::default());
+                    if let Some(style_name) = attr_value(&event, b"style-name") {
+                        if let Some(saved) = styles.text.get(&style_name) {
+                            style = *saved;
+                        }
+                    }
+                    style_stack.push(style);
+                }
                 b"line-break" if in_cell_paragraph => {
                     append_plain(&mut current_cell_runs, "\n", *style_stack.last().unwrap())
                 }
@@ -615,6 +627,9 @@ fn apply_text_properties(event: &quick_xml::events::BytesStart<'_>, style: &mut 
     if let Some(font) = attr_value(event, b"font-name") {
         apply_font_name(style, &font);
     }
+    if let Some(position) = attr_value(event, b"text-position") {
+        style.vertical_align = parse_text_position(&position);
+    }
 }
 
 fn apply_paragraph_properties(
@@ -744,6 +759,17 @@ fn parse_color(value: &str) -> Option<Color32> {
     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
     let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
     Some(Color32::from_rgb(r, g, b))
+}
+
+fn parse_text_position(value: &str) -> VerticalAlign {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.starts_with("super") {
+        VerticalAlign::Superscript
+    } else if normalized.starts_with("sub") {
+        VerticalAlign::Subscript
+    } else {
+        VerticalAlign::Baseline
+    }
 }
 
 fn apply_font_name(style: &mut CharacterStyle, font: &str) {

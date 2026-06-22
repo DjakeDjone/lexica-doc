@@ -112,20 +112,35 @@ pub(super) fn theme_switch(
     dark_surface: bool,
 ) -> bool {
     let original = *theme_mode;
-    let _ = dark_surface;
-    let switch_bg = palette.ribbon_group_bg;
-    let inactive_text = palette.text_primary;
-    let active_fill = palette.status_bg;
-    let active_text = palette.text_primary;
+    let switch_bg = if dark_surface {
+        egui::Color32::TRANSPARENT
+    } else {
+        palette.ribbon_group_bg
+    };
+    let inactive_text = if dark_surface {
+        palette.title_muted
+    } else {
+        palette.text_muted
+    };
+    let active_fill = if dark_surface {
+        palette.accent.gamma_multiply(0.20)
+    } else {
+        palette.status_bg
+    };
+    let active_text = if dark_surface {
+        palette.title_fg
+    } else {
+        palette.text_primary
+    };
 
     egui::Frame::new()
         .fill(switch_bg)
-        .inner_margin(egui::Margin::symmetric(2, 2))
-        .stroke(egui::Stroke::new(1.0, palette.border))
-        .corner_radius(8.0)
+        .inner_margin(egui::Margin::same(1))
+        .stroke(egui::Stroke::new(1.0, palette.border.gamma_multiply(0.85)))
+        .corner_radius(4.0)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().item_spacing.x = 1.0;
                 for (mode, icon) in [(ThemeMode::Light, "☀"), (ThemeMode::Dark, "🌙")] {
                     let selected = *theme_mode == mode;
                     let button = egui::Button::new(
@@ -135,18 +150,18 @@ pub(super) fn theme_switch(
                             inactive_text
                         }),
                     )
-                    .min_size(egui::vec2(34.0, 22.0))
+                    .min_size(egui::vec2(24.0, 20.0))
                     .fill(if selected {
                         active_fill
                     } else {
                         egui::Color32::TRANSPARENT
                     })
                     .stroke(if selected {
-                        egui::Stroke::new(1.0, palette.accent)
+                        egui::Stroke::new(1.0, palette.accent.gamma_multiply(0.85))
                     } else {
                         egui::Stroke::NONE
                     })
-                    .corner_radius(6.0);
+                    .corner_radius(3.0);
                     let response = ui.add(button).on_hover_text(mode.label());
                     if response.clicked() {
                         *theme_mode = mode;

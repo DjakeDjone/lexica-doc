@@ -15,7 +15,7 @@ use super::{
     markdown::markdown_to_runs,
     odt::{document_to_odt, odt_to_document},
     CharacterStyle, DocumentImage, DocumentState, FontChoice, ImageLayoutMode, LineSpacing,
-    LineSpacingKind, ParagraphAlignment, TextRun,
+    LineSpacingKind, ParagraphAlignment, TextRun, VerticalAlign,
 };
 
 impl DocumentState {
@@ -201,6 +201,11 @@ pub(crate) fn run_style_css(style: CharacterStyle) -> String {
     if style.italic {
         css.push_str("font-style:italic;");
     }
+    match style.vertical_align {
+        VerticalAlign::Baseline => {}
+        VerticalAlign::Superscript => css.push_str("vertical-align:super;font-size:65%;"),
+        VerticalAlign::Subscript => css.push_str("vertical-align:sub;font-size:65%;"),
+    }
     if style.highlight_color != Color32::TRANSPARENT {
         let _ = write!(
             css,
@@ -227,6 +232,11 @@ pub(crate) fn run_style_css_pdf(style: CharacterStyle) -> String {
     }
     if style.italic {
         css.push_str("font-style:italic;");
+    }
+    match style.vertical_align {
+        VerticalAlign::Baseline => {}
+        VerticalAlign::Superscript => css.push_str("vertical-align:super;font-size:65%;"),
+        VerticalAlign::Subscript => css.push_str("vertical-align:sub;font-size:65%;"),
     }
     if style.highlight_color != Color32::TRANSPARENT {
         let _ = write!(

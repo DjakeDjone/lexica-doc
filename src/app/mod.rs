@@ -2,6 +2,7 @@ pub(crate) mod actions;
 mod backstage;
 mod canvas_state;
 mod chrome;
+pub(crate) mod find_replace;
 mod grammar;
 mod history;
 mod palette;
@@ -38,6 +39,7 @@ pub use canvas_state::{
     TableResizeHandleRect, TableResizeKind, ZoomMode,
 };
 use chrome::{paint_ribbon, paint_status_bar, paint_tab_row, paint_title_bar, RibbonTab};
+use find_replace::{paint_find_replace_window, FindReplaceState};
 pub use history::ChangeHistory;
 use palette::{configure_theme, theme_palette};
 use recent_files::{load_recent_files, remember_recent_file};
@@ -69,6 +71,7 @@ pub struct WorsApp {
     active_tab: RibbonTab,
     theme_mode: ThemeMode,
     backstage: BackstageState,
+    find_replace: FindReplaceState,
     status_message: String,
     current_path: Option<PathBuf>,
     recent_files: Vec<PathBuf>,
@@ -209,6 +212,7 @@ impl WorsApp {
             active_tab: RibbonTab::Home,
             theme_mode,
             backstage: BackstageState::default(),
+            find_replace: FindReplaceState::default(),
             status_message: "Ready".to_owned(),
             current_path: None,
             recent_files: load_recent_files(),
@@ -314,7 +318,6 @@ impl WorsApp {
         }
     }
 }
-
 
 fn configure_docx_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -518,6 +521,12 @@ impl App for WorsApp {
                 }
             );
         }
+        if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+            self.find_replace.visible = true;
+        }
+        if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::H)) {
+            self.find_replace.visible = true;
+        }
 
         let palette = theme_palette(self.theme_mode);
         let status_line = self.status_message.clone();
@@ -684,6 +693,7 @@ impl App for WorsApp {
                         &mut self.current_path,
                         &mut self.theme_mode,
                         &mut self.history,
+                        &mut self.find_replace,
                         &mut self.grammar_config,
                         &self.grammar_status,
                         &mut self.grammar_auto_check,
@@ -807,6 +817,18 @@ impl App for WorsApp {
                     palette,
                 );
             });
+
+        let find_replace_changed = paint_find_replace_window(
+            ui.ctx(),
+            &mut self.find_replace,
+            &mut self.document,
+            &mut self.canvas,
+            &mut self.history,
+            &mut self.status_message,
+        );
+        if find_replace_changed {
+            self.request_grammar_check(false);
+        }
 
         if self.show_grammar_warning {
             let warning_message = self.grammar_warning_message.clone();

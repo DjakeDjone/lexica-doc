@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::document::{
     CharacterStyle, DistanceFromText, DocumentImage, LineSpacing, LineSpacingKind, PageMargins,
-    PageSize, ParagraphAlignment, ParagraphStyle, TextRun,
+    PageSize, ParagraphAlignment, ParagraphStyle, TextRun, VerticalAlign,
 };
 
 pub(crate) fn append_plain(runs: &mut Vec<TextRun>, text: &str, style: CharacterStyle) {
@@ -79,6 +79,14 @@ pub(crate) fn paragraph_alignment_for(value: &str) -> ParagraphAlignment {
         "right" => ParagraphAlignment::Right,
         "both" | "distribute" => ParagraphAlignment::Justify,
         _ => ParagraphAlignment::Left,
+    }
+}
+
+pub(crate) fn vertical_align_for(value: Option<&str>) -> VerticalAlign {
+    match value {
+        Some("superscript") => VerticalAlign::Superscript,
+        Some("subscript") => VerticalAlign::Subscript,
+        _ => VerticalAlign::Baseline,
     }
 }
 

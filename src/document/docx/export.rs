@@ -10,7 +10,8 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 use crate::document::{
     CharacterStyle, DocumentImage, DocumentState, DocumentTable, FontChoice, HeaderFooterKind,
     HeaderFooterVariant, ImageLayoutMode, LineSpacing, LineSpacingKind, ListKind, PageSetup,
-    Paragraph, ParagraphAlignment, SectionId, TextRun, WrapMode, OBJECT_REPLACEMENT_CHAR,
+    Paragraph, ParagraphAlignment, SectionId, TextRun, VerticalAlign, WrapMode,
+    OBJECT_REPLACEMENT_CHAR,
 };
 
 pub fn document_to_docx(document: &DocumentState) -> Result<Vec<u8>, String> {
@@ -461,6 +462,15 @@ fn write_run_properties(xml: &mut String, style: CharacterStyle) {
     }
     if style.strikethrough {
         xml.push_str("<w:strike/>");
+    }
+    match style.vertical_align {
+        VerticalAlign::Baseline => {}
+        VerticalAlign::Superscript => {
+            xml.push_str(r#"<w:vertAlign w:val="superscript"/>"#);
+        }
+        VerticalAlign::Subscript => {
+            xml.push_str(r#"<w:vertAlign w:val="subscript"/>"#);
+        }
     }
     let _ = write!(
         xml,

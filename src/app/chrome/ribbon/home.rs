@@ -5,12 +5,13 @@ use crate::app::{
     actions::{
         set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment,
         set_text_color, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
-        toggle_strikethrough, toggle_underline,
+        toggle_strikethrough, toggle_subscript, toggle_superscript, toggle_underline,
     },
+    find_replace::FindReplaceState,
     palette::{theme_switch, ThemeMode, ThemePalette},
     CanvasState, ChangeHistory,
 };
-use crate::document::{DocumentState, FontChoice, ListKind, ParagraphAlignment};
+use crate::document::{DocumentState, FontChoice, ListKind, ParagraphAlignment, VerticalAlign};
 
 pub(crate) fn ribbon_font_group(
     ui: &mut egui::Ui,
@@ -60,6 +61,28 @@ pub(crate) fn ribbon_font_group(
         }
         if format_button(ui, canvas.active_style.strikethrough, "S", palette).clicked() {
             toggle_strikethrough(document, canvas, history);
+        }
+        if format_button(
+            ui,
+            canvas.active_style.vertical_align == VerticalAlign::Superscript,
+            "X^2",
+            palette,
+        )
+        .on_hover_text("Superscript")
+        .clicked()
+        {
+            toggle_superscript(document, canvas, history);
+        }
+        if format_button(
+            ui,
+            canvas.active_style.vertical_align == VerticalAlign::Subscript,
+            "X_2",
+            palette,
+        )
+        .on_hover_text("Subscript")
+        .clicked()
+        {
+            toggle_subscript(document, canvas, history);
         }
     });
 }
@@ -144,6 +167,22 @@ pub(crate) fn ribbon_color_group(
                 .size(11.0)
                 .color(palette.text_muted),
         );
+    });
+}
+
+pub(crate) fn ribbon_editing_group(
+    ui: &mut egui::Ui,
+    find_replace: &mut FindReplaceState,
+    palette: ThemePalette,
+) {
+    ribbon_group(ui, "Editing", palette, |ui| {
+        if ui
+            .button("Find")
+            .on_hover_text("Find and replace document body text")
+            .clicked()
+        {
+            find_replace.visible = true;
+        }
     });
 }
 

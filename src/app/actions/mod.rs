@@ -16,7 +16,7 @@ pub use file::{open_document, save_document, save_document_as, save_document_as_
 pub use format::{
     set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment, set_text_color,
     sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
-    toggle_strikethrough, toggle_underline,
+    toggle_strikethrough, toggle_subscript, toggle_superscript, toggle_underline,
 };
 
 pub use insert::{

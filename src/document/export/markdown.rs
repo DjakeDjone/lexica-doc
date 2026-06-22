@@ -1,6 +1,6 @@
 use crate::document::{
     DocumentState, DocumentTable, FontChoice, ListKind, ParagraphAlignment, TableCell, TextRun,
-    OBJECT_REPLACEMENT_CHAR,
+    VerticalAlign, OBJECT_REPLACEMENT_CHAR,
 };
 
 impl DocumentState {
@@ -128,6 +128,11 @@ pub(super) fn markdown_text_from_runs(runs: &[TextRun]) -> String {
         }
         if run.style.underline {
             text = format!("<u>{text}</u>");
+        }
+        match run.style.vertical_align {
+            VerticalAlign::Baseline => {}
+            VerticalAlign::Superscript => text = format!("<sup>{text}</sup>"),
+            VerticalAlign::Subscript => text = format!("<sub>{text}</sub>"),
         }
         output.push_str(&text);
     }

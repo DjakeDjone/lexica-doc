@@ -1,3 +1,4 @@
+pub(crate) mod header_layout;
 pub(crate) mod ribbon;
 pub(crate) mod status_bar;
 pub(crate) mod tab_row;

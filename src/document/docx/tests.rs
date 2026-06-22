@@ -11,7 +11,8 @@ use crate::document::{
     CharacterStyle, DistanceFromText, DocumentImage, DocumentState, DocumentTable,
     HeaderFooterStory, ImageLayoutMode, ImageRendering, LineSpacing, LineSpacingKind, ListKind,
     PageMargins, PageSetup, PageSize, ParagraphAlignment, ParagraphStyle, PositionAlign, Section,
-    TableCell, TextRun, VerticalPosition, VerticalRelativeTo, WrapMode, OBJECT_REPLACEMENT_CHAR,
+    TableCell, TextRun, VerticalAlign, VerticalPosition, VerticalRelativeTo, WrapMode,
+    OBJECT_REPLACEMENT_CHAR,
 };
 use eframe::egui::Color32;
 use zip::ZipArchive;
@@ -474,6 +475,68 @@ fn exports_docx_package_with_rich_word_parts() {
     assert!(archive.by_name("word/styles.xml").is_ok());
     assert!(archive.by_name("word/numbering.xml").is_ok());
     assert!(archive.by_name("word/settings.xml").is_ok());
+}
+
+#[test]
+fn parses_docx_vertical_align_runs() {
+    let imported = parse_document_xml(
+        r#"
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+          <w:body>
+            <w:p>
+              <w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>2</w:t></w:r>
+              <w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>n</w:t></w:r>
+            </w:p>
+          </w:body>
+        </w:document>
+        "#,
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &HashMap::new(),
+    )
+    .expect("document xml");
+
+    assert_eq!(
+        imported.runs[0].style.vertical_align,
+        VerticalAlign::Superscript
+    );
+    assert_eq!(
+        imported.runs[1].style.vertical_align,
+        VerticalAlign::Subscript
+    );
+}
+
+#[test]
+fn exports_docx_vertical_align_runs() {
+    let mut document = DocumentState::bootstrap();
+    document.replace_with_runs(
+        "Vertical".to_owned(),
+        vec![
+            TextRun {
+                text: "2".to_owned(),
+                style: CharacterStyle {
+                    vertical_align: VerticalAlign::Superscript,
+                    ..CharacterStyle::default()
+                },
+            },
+            TextRun {
+                text: "n".to_owned(),
+                style: CharacterStyle {
+                    vertical_align: VerticalAlign::Subscript,
+                    ..CharacterStyle::default()
+                },
+            },
+        ],
+    );
+
+    let bytes = document_to_docx(&document).expect("docx export");
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).expect("docx zip");
+    let document_xml = zip_text(&mut archive, "word/document.xml");
+
+    assert!(document_xml.contains(r#"<w:vertAlign w:val="superscript"/>"#));
+    assert!(document_xml.contains(r#"<w:vertAlign w:val="subscript"/>"#));
 }
 
 #[test]

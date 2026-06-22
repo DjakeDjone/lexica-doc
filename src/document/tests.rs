@@ -7,7 +7,7 @@ use super::{
     empty_header_footer_runs, export::plain_text_from_runs, text_format, CharacterStyle,
     DocumentImage, DocumentState, FontChoice, HeaderFooterKind, HeaderFooterStory,
     HeaderFooterVariant, ImageLayoutMode, ImageRendering, ListKind, ParagraphStyle, TextRun,
-    WrapMode, DOCX_BODY_BOLD, DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD,
+    VerticalAlign, WrapMode, DOCX_BODY_BOLD, DOCX_CARLITO_BOLD, DOCX_LIBERATION_MONO_BOLD,
     OBJECT_REPLACEMENT_CHAR,
 };
 
@@ -78,6 +78,41 @@ fn bold_text_uses_registered_bold_font_faces() {
 }
 
 #[test]
+fn character_style_defaults_to_baseline_vertical_align() {
+    assert_eq!(
+        CharacterStyle::default().vertical_align,
+        VerticalAlign::Baseline
+    );
+}
+
+#[test]
+fn vertical_align_text_format_uses_smaller_raised_or_lowered_text() {
+    let baseline = text_format(CharacterStyle::default(), 1.0);
+    assert_eq!(baseline.font_id.size, 12.0);
+    assert_eq!(baseline.valign, eframe::egui::Align::BOTTOM);
+
+    let superscript = text_format(
+        CharacterStyle {
+            vertical_align: VerticalAlign::Superscript,
+            ..CharacterStyle::default()
+        },
+        1.0,
+    );
+    assert!((superscript.font_id.size - 7.8).abs() < 0.001);
+    assert_eq!(superscript.valign, eframe::egui::Align::TOP);
+
+    let subscript = text_format(
+        CharacterStyle {
+            vertical_align: VerticalAlign::Subscript,
+            ..CharacterStyle::default()
+        },
+        1.0,
+    );
+    assert!((subscript.font_id.size - 7.8).abs() < 0.001);
+    assert_eq!(subscript.valign, eframe::egui::Align::BOTTOM);
+}
+
+#[test]
 fn selected_style_uses_last_selected_character_at_run_boundary() {
     let mut document = DocumentState::bootstrap();
     document.replace_with_runs(
@@ -99,6 +134,42 @@ fn selected_style_uses_last_selected_character_at_run_boundary() {
 
     assert!(document.selection_style_at(0..4).bold);
     assert!(!document.selection_style_at(0..5).bold);
+}
+
+#[test]
+fn exports_vertical_align_to_html_pdf_and_markdown() {
+    let mut document = DocumentState::bootstrap();
+    document.replace_with_runs(
+        "Test".to_owned(),
+        vec![
+            TextRun {
+                text: "super".to_owned(),
+                style: CharacterStyle {
+                    vertical_align: VerticalAlign::Superscript,
+                    ..CharacterStyle::default()
+                },
+            },
+            TextRun {
+                text: "sub".to_owned(),
+                style: CharacterStyle {
+                    vertical_align: VerticalAlign::Subscript,
+                    ..CharacterStyle::default()
+                },
+            },
+        ],
+    );
+
+    let html = document.to_html();
+    assert!(html.contains("vertical-align:super;font-size:65%;"));
+    assert!(html.contains("vertical-align:sub;font-size:65%;"));
+
+    let pdf_html = document.to_pdf_html();
+    assert!(pdf_html.contains("vertical-align:super;font-size:65%;"));
+    assert!(pdf_html.contains("vertical-align:sub;font-size:65%;"));
+
+    let markdown = document.to_markdown();
+    assert!(markdown.contains("<sup>super</sup>"));
+    assert!(markdown.contains("<sub>sub</sub>"));
 }
 
 #[test]
@@ -508,7 +579,6 @@ fn exports_pdf_html_with_pdf_friendly_css() {
     assert!(!html.contains("box-shadow"));
 }
 
-
 #[test]
 fn saves_pdf_extension() {
     let mut path = std::env::temp_dir();
@@ -537,6 +607,7 @@ fn test_print_html_css() {
         italic: false,
         underline: false,
         strikethrough: false,
+        vertical_align: VerticalAlign::Baseline,
         font_size_points: 11.5,
         font_choice: FontChoice::Proportional,
         font_family_name: Some("Carlito"),

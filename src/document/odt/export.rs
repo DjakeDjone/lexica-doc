@@ -9,7 +9,7 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 use crate::document::{
     CharacterStyle, DocumentImage, DocumentState, DocumentTable, FontChoice, LineSpacing,
-    LineSpacingKind, ListKind, ParagraphAlignment, ParagraphStyle, TextRun,
+    LineSpacingKind, ListKind, ParagraphAlignment, ParagraphStyle, TextRun, VerticalAlign,
     OBJECT_REPLACEMENT_CHAR,
 };
 
@@ -213,7 +213,7 @@ impl StyleBuilder {
                 } else {
                     String::new()
                 },
-                odt_font_name(*style)
+                format!("{} {}", odt_font_name(*style), odt_text_position(*style))
             );
         }
         xml
@@ -229,6 +229,7 @@ struct StyleKey {
     font_size_tenths: u16,
     font_choice: FontChoice,
     font_family_name: Option<&'static str>,
+    vertical_align: VerticalAlign,
     text_color: [u8; 4],
     highlight_color: [u8; 4],
 }
@@ -243,6 +244,7 @@ impl From<CharacterStyle> for StyleKey {
             font_size_tenths: (style.font_size_points * 10.0).round() as u16,
             font_choice: style.font_choice,
             font_family_name: style.font_family_name,
+            vertical_align: style.vertical_align,
             text_color: style.text_color.to_array(),
             highlight_color: style.highlight_color.to_array(),
         }
@@ -508,6 +510,14 @@ fn odt_font_name(style: CharacterStyle) -> String {
         },
     };
     format!("style:font-name=\"{}\"", xml_escape(name))
+}
+
+fn odt_text_position(style: CharacterStyle) -> &'static str {
+    match style.vertical_align {
+        VerticalAlign::Baseline => "",
+        VerticalAlign::Superscript => "style:text-position=\"super 58%\"",
+        VerticalAlign::Subscript => "style:text-position=\"sub 58%\"",
+    }
 }
 
 fn image_extension(bytes: &[u8]) -> &'static str {

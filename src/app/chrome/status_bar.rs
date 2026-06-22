@@ -22,6 +22,15 @@ pub(crate) fn paint_status_bar(
             .filter(|ch| *ch != OBJECT_REPLACEMENT_CHAR)
             .collect();
         let word_count = plain_text.split_whitespace().count();
+        let (line, column) = cursor_line_column(document, canvas.selection.primary.index);
+        let selection_label = selection_stats(document, canvas)
+            .map(|stats| {
+                format!(
+                    " | {} selected words, {} chars",
+                    stats.word_count, stats.char_count
+                )
+            })
+            .unwrap_or_default();
         ui.label(
             egui::RichText::new("Page 1")
                 .size(11.0)
@@ -29,9 +38,11 @@ pub(crate) fn paint_status_bar(
         );
         ui.separator();
         ui.label(
-            egui::RichText::new(format!("{word_count} words"))
-                .size(11.0)
-                .color(palette.text_muted),
+            egui::RichText::new(format!(
+                "{word_count} words{selection_label} | Ln {line}, Col {column}"
+            ))
+            .size(11.0)
+            .color(palette.text_muted),
         );
         ui.separator();
         ui.label(
@@ -118,6 +129,49 @@ pub(crate) fn paint_status_bar(
     });
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SelectionStats {
+    pub word_count: usize,
+    pub char_count: usize,
+}
+
+pub(crate) fn selection_stats(
+    document: &DocumentState,
+    canvas: &CanvasState,
+) -> Option<SelectionStats> {
+    let range = canvas.selection.as_sorted_char_range();
+    if range.start >= range.end {
+        return None;
+    }
+    let selected: String = document
+        .selected_text(range)
+        .chars()
+        .filter(|ch| *ch != OBJECT_REPLACEMENT_CHAR)
+        .collect();
+    Some(SelectionStats {
+        word_count: selected.split_whitespace().count(),
+        char_count: selected.chars().count(),
+    })
+}
+
+pub(crate) fn cursor_line_column(document: &DocumentState, cursor: usize) -> (usize, usize) {
+    let mut line = 1usize;
+    let mut column = 1usize;
+    for ch in document
+        .plain_text()
+        .chars()
+        .take(cursor.min(document.total_chars()))
+    {
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
 pub(crate) fn today_label() -> String {
     #[cfg(target_arch = "wasm32")]
     {
@@ -156,4 +210,57 @@ pub(crate) fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
     let month = mp + if mp < 10 { 3 } else { -9 };
     let year = y + if month <= 2 { 1 } else { 0 };
     (year as i32, month as u32, day as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::{CharacterStyle, TextRun};
+    use eframe::egui::{epaint::text::cursor::CCursor, text_selection::CCursorRange};
+
+    #[test]
+    fn cursor_line_column_counts_from_one() {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs(
+            "Test".to_owned(),
+            vec![TextRun {
+                text: "one\ntwo".to_owned(),
+                style: CharacterStyle::default(),
+            }],
+        );
+
+        assert_eq!(cursor_line_column(&document, 0), (1, 1));
+        assert_eq!(cursor_line_column(&document, 4), (2, 1));
+        assert_eq!(cursor_line_column(&document, 6), (2, 3));
+    }
+
+    #[test]
+    fn selection_stats_ignore_object_replacement_characters() {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs(
+            "Test".to_owned(),
+            vec![TextRun {
+                text: format!("one {OBJECT_REPLACEMENT_CHAR} two"),
+                style: CharacterStyle::default(),
+            }],
+        );
+        let mut canvas = CanvasState::default();
+        canvas.selection = CCursorRange::two(CCursor::new(0), CCursor::new(document.total_chars()));
+
+        assert_eq!(
+            selection_stats(&document, &canvas),
+            Some(SelectionStats {
+                word_count: 2,
+                char_count: 8
+            })
+        );
+    }
+
+    #[test]
+    fn empty_selection_has_no_selection_stats() {
+        let document = DocumentState::bootstrap();
+        let canvas = CanvasState::default();
+
+        assert_eq!(selection_stats(&document, &canvas), None);
+    }
 }
