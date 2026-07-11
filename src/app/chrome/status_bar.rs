@@ -1,6 +1,6 @@
 use eframe::egui;
 
-use crate::app::{palette::ThemePalette, CanvasState};
+use crate::app::{palette::ThemePalette, CanvasState, ZoomMode};
 use crate::document::{DocumentState, OBJECT_REPLACEMENT_CHAR};
 use crate::grammar::GrammarStatus;
 
@@ -8,7 +8,9 @@ use crate::grammar::GrammarStatus;
 pub(crate) fn paint_status_bar(
     ui: &mut egui::Ui,
     document: &DocumentState,
-    canvas: &CanvasState,
+    canvas: &mut CanvasState,
+    current_page: usize,
+    page_count: usize,
     status_message: &str,
     grammar_status: &GrammarStatus,
     grammar_issue_count: usize,
@@ -32,9 +34,13 @@ pub(crate) fn paint_status_bar(
             })
             .unwrap_or_default();
         ui.label(
-            egui::RichText::new("Page 1")
-                .size(11.0)
-                .color(palette.text_muted),
+            egui::RichText::new(format!(
+                "Page {} of {}",
+                current_page.max(1),
+                page_count.max(1)
+            ))
+            .size(11.0)
+            .color(palette.text_muted),
         );
         ui.separator();
         ui.label(
@@ -97,21 +103,26 @@ pub(crate) fn paint_status_bar(
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button("+").on_hover_text("Zoom in").clicked() {
+                canvas.zoom_mode = ZoomMode::Manual;
+                canvas.zoom = (canvas.zoom + 0.1).min(3.0);
+            }
             ui.label(
                 egui::RichText::new(format!("{:.0}%", canvas.zoom * 100.0))
                     .size(11.0)
                     .color(palette.text_muted),
             );
-            ui.separator();
-            let setup = document.default_page_setup();
-            ui.label(
-                egui::RichText::new(format!(
-                    "{:.0} x {:.0} pt",
-                    setup.page_size.width_points, setup.page_size.height_points
-                ))
-                .size(11.0)
-                .color(palette.text_muted),
-            );
+            if ui.small_button("−").on_hover_text("Zoom out").clicked() {
+                canvas.zoom_mode = ZoomMode::Manual;
+                canvas.zoom = (canvas.zoom - 0.1).max(0.5);
+            }
+            if ui
+                .selectable_label(canvas.zoom_mode == ZoomMode::FitPage, "Fit")
+                .on_hover_text("Fit page width")
+                .clicked()
+            {
+                canvas.zoom_mode = ZoomMode::FitPage;
+            }
             ui.separator();
             let ai_label = if ai_config.enable { "AI On" } else { "AI Off" };
             if ui

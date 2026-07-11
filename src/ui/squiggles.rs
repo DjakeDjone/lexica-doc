@@ -46,24 +46,22 @@ pub fn paint_grammar_squiggles(
 
             if selected_replacement.is_none() {
                 egui::Tooltip::for_enabled(&response).show(|ui| {
-                    ui.set_max_width(360.0);
-                    ui.label(&error.message);
-                    ui.separator();
-
-                    for replacement in error.replacements.iter().take(5) {
-                        let btn = egui::Button::selectable(false, replacement);
-                        if ui.add_sized([ui.available_width(), 0.0], btn).clicked() {
-                            selected_replacement = Some(ReplacementAction {
-                                byte_start: error.byte_start,
-                                byte_end: error.byte_end,
-                                replacement: replacement.clone(),
-                            });
+                    ui.set_min_width(150.0);
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        for replacement in error.replacements.iter().take(5) {
+                            if ui.selectable_label(false, replacement).clicked() {
+                                selected_replacement = Some(ReplacementAction {
+                                    byte_start: error.byte_start,
+                                    byte_end: error.byte_end,
+                                    replacement: replacement.clone(),
+                                });
+                            }
                         }
-                    }
 
-                    if error.replacements.is_empty() {
-                        ui.label("No replacements available.");
-                    }
+                        if error.replacements.is_empty() {
+                            ui.label(egui::RichText::new("No replacements available.").weak().italics());
+                        }
+                    });
                 });
             }
         }

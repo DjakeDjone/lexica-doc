@@ -465,6 +465,9 @@ fn exports_docx_package_with_rich_word_parts() {
     assert!(content_types.contains("image/png"));
 
     let rels = zip_text(&mut archive, "word/_rels/document.xml.rels");
+    assert!(rels.contains(r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml""#));
+    assert!(rels.contains(r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml""#));
+    assert!(rels.contains(r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml""#));
     assert!(rels.contains("/relationships/image"));
     assert!(rels.contains("/relationships/header"));
     assert!(rels.contains("/relationships/footer"));

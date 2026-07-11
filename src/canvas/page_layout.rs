@@ -21,6 +21,14 @@ pub(crate) struct PageLayout {
 }
 
 impl PageLayout {
+    pub(super) fn current_page(&self, galley: &egui::Galley, cursor: CCursor) -> usize {
+        let y = galley.pos_from_cursor(cursor).center().y;
+        self.pages
+            .iter()
+            .position(|page| y >= page.start_y && y <= page.end_y)
+            .map_or(1, |index| index + 1)
+    }
+
     pub(super) fn document_pos(&self, pointer_pos: egui::Pos2) -> Option<egui::Vec2> {
         self.pages.iter().find_map(|page| {
             if page.content_rect.contains(pointer_pos) {

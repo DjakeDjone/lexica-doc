@@ -14,8 +14,8 @@ mod tests;
 use eframe::egui::{
     self, epaint::text::cursor::CCursor, epaint::CornerRadius,
     text_selection::visuals::paint_text_cursor, text_selection::visuals::paint_text_selection,
-    text_selection::CCursorRange, Align2, Color32, EventFilter, FontFamily, FontId, Id, Rect,
-    Sense, Stroke, StrokeKind,
+    text_selection::CCursorRange, Align2, Color32, EventFilter, Id, Rect, Sense, Stroke,
+    StrokeKind,
 };
 
 use crate::{
@@ -26,8 +26,8 @@ use crate::{
     document::{CharacterStyle, DocumentState, TextRun, WrapMode},
     grammar::GrammarError,
     layout::{
-        centered_page_rect, document_points_to_pixels, document_points_to_screen_points,
-        fit_page_zoom, section_page_content_rect,
+        centered_page_rect, document_points_to_screen_points, fit_page_zoom,
+        section_page_content_rect,
     },
     ui::squiggles::{paint_grammar_squiggles, ReplacementAction, SquigglePageSlice},
 };
@@ -53,6 +53,8 @@ pub(crate) use layout::layout_document;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CanvasOutput {
     pub text_changed: bool,
+    pub current_page: usize,
+    pub page_count: usize,
 }
 
 pub fn paint_document_canvas(
@@ -69,7 +71,6 @@ pub fn paint_document_canvas(
     let editor_id = Id::new("document_canvas");
     let response = ui.interact(viewport, editor_id, Sense::click_and_drag());
     let painter = ui.painter_at(viewport);
-    let pixels_per_point = ui.ctx().pixels_per_point();
     apply_viewport_input(ui, &response, canvas);
     if canvas.zoom_mode == crate::app::ZoomMode::FitPage {
         canvas.zoom = fit_page_zoom(viewport, document.default_page_setup().page_size);
@@ -515,49 +516,9 @@ pub fn paint_document_canvas(
         }
     }
 
-    let page_pixels = (
-        document_points_to_pixels(
-            document.page_size.width_points,
-            pixels_per_point,
-            canvas.zoom,
-        ),
-        document_points_to_pixels(
-            document.page_size.height_points,
-            pixels_per_point,
-            canvas.zoom,
-        ),
-    );
-    let footer = format!(
-        "{:.0} x {:.0} px  |  {} pages  |  y {:.0}",
-        page_pixels.0,
-        page_pixels.1,
-        page_layout.pages.len(),
-        canvas.pan.y
-    );
-    let footer_galley = painter.layout_no_wrap(
-        footer,
-        FontId::new(11.0, FontFamily::Monospace),
-        palette.footer_text,
-    );
-    let footer_rect = Rect::from_min_size(
-        egui::pos2(
-            viewport.left() + 22.0,
-            viewport.bottom() - footer_galley.size().y - 24.0,
-        ),
-        footer_galley.size() + egui::vec2(20.0, 14.0),
-    );
-    painter.rect_filled(footer_rect, CornerRadius::same(3), palette.footer_bg);
-    painter.rect_stroke(
-        footer_rect,
-        CornerRadius::same(3),
-        Stroke::new(1.0, palette.footer_stroke),
-        StrokeKind::Outside,
-    );
-    painter.galley(
-        egui::pos2(footer_rect.left() + 10.0, footer_rect.top() + 7.0),
-        footer_galley,
-        palette.footer_text,
-    );
+    output.page_count = page_layout.pages.len();
+    output.current_page =
+        page_layout.current_page(&document_layout.galley, canvas.selection.primary);
 
     if let Some(replacement) = pending_replacement {
         if apply_grammar_replacement(document, canvas, history, ui, replacement) {

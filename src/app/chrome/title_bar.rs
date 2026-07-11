@@ -23,9 +23,10 @@ pub(crate) fn paint_title_bar(
 ) {
     let path_label = current_path
         .as_ref()
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Unsaved document".to_owned());
-    let title_label = format!("{} - Word", document.title);
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Not saved yet".to_owned());
+    let title_label = format!("{} — wors", document.title);
 
     // Render the title bar content first so buttons register their interactions
     // before the drag overlay.

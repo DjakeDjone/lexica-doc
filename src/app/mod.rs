@@ -809,7 +809,9 @@ impl App for WorsApp {
                 paint_status_bar(
                     ui,
                     &self.document,
-                    &self.canvas,
+                    &mut self.canvas,
+                    canvas_output.current_page,
+                    canvas_output.page_count,
                     &self.status_message,
                     &self.grammar_status,
                     self.grammar_errors.len(),

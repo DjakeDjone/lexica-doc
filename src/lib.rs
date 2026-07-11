@@ -9,3 +9,4 @@ pub mod ui;
 pub mod api;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_server;
+

@@ -25,6 +25,9 @@ struct DocxPackage {
 impl DocxPackage {
     fn from_document(document: &DocumentState) -> Result<Self, String> {
         let mut builder = PackageBuilder::default();
+        builder.add_document_relationship(REL_STYLES, "styles.xml".to_owned());
+        builder.add_document_relationship(REL_NUMBERING, "numbering.xml".to_owned());
+        builder.add_document_relationship(REL_SETTINGS, "settings.xml".to_owned());
         let section_refs = builder.build_header_footer_parts(document);
         let document_xml = builder.document_xml(document, &section_refs);
 
@@ -929,6 +932,12 @@ fn xml_escape_char(ch: char) -> String {
 }
 
 const REL_IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
+const REL_STYLES: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
+const REL_NUMBERING: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
+const REL_SETTINGS: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings";
 const REL_HEADER: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
 const REL_FOOTER: &str =
