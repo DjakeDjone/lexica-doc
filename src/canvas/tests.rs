@@ -77,6 +77,7 @@ fn make_document(
         sections: vec![crate::document::Section::first(
             crate::document::PageSetup::standard(),
         )],
+        source_docx: None,
     }
 }
 
@@ -249,7 +250,7 @@ fn resize_geometry_clamps_to_minimum_size() {
         0.0,
         false,
     );
-    assert_geometry_close(west, (24.0, 80.0, 76.0, 0.0), ResizeHandle::W);
+    assert_geometry_close(west, (1.0, 80.0, 99.0, 0.0), ResizeHandle::W);
 
     let north = crate::canvas::image::resized_image_geometry(
         ResizeHandle::N,
@@ -259,7 +260,7 @@ fn resize_geometry_clamps_to_minimum_size() {
         200.0,
         false,
     );
-    assert_geometry_close(north, (100.0, 24.0, 0.0, 56.0), ResizeHandle::N);
+    assert_geometry_close(north, (100.0, 1.0, 0.0, 79.0), ResizeHandle::N);
 }
 
 #[test]
@@ -281,6 +282,58 @@ fn resize_geometry_locked_ratio_keeps_anchors_stable() {
     let south =
         crate::canvas::image::resized_image_geometry(ResizeHandle::S, 100.0, 50.0, 0.0, 20.0, true);
     assert_geometry_close(south, (140.0, 70.0, -20.0, 0.0), ResizeHandle::S);
+}
+
+#[test]
+fn image_drag_preview_keeps_image_and_handles_aligned() {
+    let original = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(100.0, 60.0));
+    let preview = crate::canvas::image::image_drag_preview_rect(
+        7,
+        original,
+        Some((7, original, egui::vec2(35.0, -10.0))),
+    );
+
+    assert_eq!(preview.min, egui::pos2(55.0, 20.0));
+    assert_eq!(preview.size(), original.size());
+    let handles = crate::canvas::image::resize_handle_rects(preview);
+    assert_eq!(handles[0].1.center(), preview.left_top());
+    assert_eq!(handles[4].1.center(), preview.right_bottom());
+}
+
+#[test]
+fn thin_imported_image_keeps_its_size_and_can_shrink() {
+    let image = make_test_image(32, 453.6, 20.35, WrapMode::Inline);
+    let size = crate::canvas::image::image_display_size(&image, 600.0, 1.0);
+    assert!((size.x - 453.6).abs() < 0.01);
+    assert!((size.y - 20.35).abs() < 0.01);
+
+    let resized = crate::canvas::image::resized_image_geometry(
+        ResizeHandle::E,
+        453.6,
+        20.35,
+        -100.0,
+        0.0,
+        true,
+    );
+    assert!((resized.0 - 353.6).abs() < 0.01);
+    assert!(
+        resized.1 < 20.35,
+        "locked resize should not be blocked at 24pt"
+    );
+}
+
+#[test]
+fn unselected_image_does_not_expose_resize_handles() {
+    let rect = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(100.0, 20.0));
+    let mut canvas = CanvasState::default();
+    canvas.image_rects.push((7, rect));
+
+    assert_eq!(
+        crate::canvas::image::image_handle_hit(&canvas, rect.left_top(), 6.0),
+        None
+    );
+    canvas.selected_image_id = Some(7);
+    assert!(crate::canvas::image::image_handle_hit(&canvas, rect.left_top(), 6.0).is_some());
 }
 
 fn assert_geometry_close(

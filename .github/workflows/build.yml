@@ -48,6 +48,9 @@ jobs:
       - name: Cache Cargo registry and build output
         uses: Swatinem/rust-cache@v2
 
+      - name: Test
+        run: cargo test --locked
+
       - name: Build release binary
         run: cargo build --release --locked
 

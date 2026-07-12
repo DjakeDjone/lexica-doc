@@ -6,7 +6,9 @@ use crate::app::{
     palette::ThemePalette,
     CanvasState, ChangeHistory,
 };
-use crate::document::{DocumentState, ImageLayoutMode, ImageRendering, WrapMode};
+use crate::document::{
+    DocumentState, ImageLayoutMode, ImageRendering, WrapMode, MIN_IMAGE_SIZE_POINTS,
+};
 
 pub(crate) fn ribbon_picture_group(
     ui: &mut egui::Ui,
@@ -48,14 +50,14 @@ pub(crate) fn ribbon_picture_group(
         let resp = ui.add(
             egui::DragValue::new(&mut width)
                 .speed(1.0)
-                .range(24.0..=1200.0)
+                .range(MIN_IMAGE_SIZE_POINTS..=1200.0)
                 .fixed_decimals(0)
                 .suffix(" pt"),
         );
         if resp.changed() {
             let now = ui.input(|i| i.time);
             history.checkpoint_coalesced(document, now);
-            let new_h = (width * aspect).max(24.0);
+            let new_h = (width * aspect).max(MIN_IMAGE_SIZE_POINTS);
             document.resize_image_by_id(image_id, width, new_h);
             *status_message = format!("Image: {:.0} × {:.0} pt", width, new_h);
         }
@@ -70,14 +72,14 @@ pub(crate) fn ribbon_picture_group(
         let resp = ui.add(
             egui::DragValue::new(&mut height)
                 .speed(1.0)
-                .range(24.0..=1200.0)
+                .range(MIN_IMAGE_SIZE_POINTS..=1200.0)
                 .fixed_decimals(0)
                 .suffix(" pt"),
         );
         if resp.changed() {
             let now = ui.input(|i| i.time);
             history.checkpoint_coalesced(document, now);
-            let new_w = (height * aspect_inv).max(24.0);
+            let new_w = (height * aspect_inv).max(MIN_IMAGE_SIZE_POINTS);
             document.resize_image_by_id(image_id, new_w, height);
             *status_message = format!("Image: {:.0} × {:.0} pt", new_w, height);
         }

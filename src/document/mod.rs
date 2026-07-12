@@ -65,6 +65,7 @@ impl DocumentState {
             different_odd_even_pages: false,
             page_number_start: 1,
             sections: vec![Section::first(PageSetup::standard())],
+            source_docx: None,
         }
     }
 }

@@ -330,6 +330,7 @@ fn moves_image_paragraph_later_without_extra_blank_lines() {
         different_odd_even_pages: false,
         page_number_start: 1,
         sections: vec![super::Section::first(super::PageSetup::standard())],
+        source_docx: None,
     };
 
     let cursor = document
@@ -393,6 +394,7 @@ fn moves_image_paragraph_earlier_without_losing_metadata() {
         different_odd_even_pages: false,
         page_number_start: 1,
         sections: vec![super::Section::first(super::PageSetup::standard())],
+        source_docx: None,
     };
 
     let cursor = document

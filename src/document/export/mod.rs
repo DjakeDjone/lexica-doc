@@ -34,10 +34,9 @@ impl DocumentState {
 
         let runs = match extension.as_str() {
             "docx" => {
-                let imported = docx_to_document(
-                    &fs::read(path)
-                        .map_err(|error| format!("failed to read {}: {error}", path.display()))?,
-                )?;
+                let source_bytes = fs::read(path)
+                    .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+                let imported = docx_to_document(&source_bytes)?;
 
                 let mut document = Self::bootstrap();
                 document.title = title;
@@ -64,6 +63,7 @@ impl DocumentState {
                 }
                 document.normalize_runs();
                 document.ensure_paragraph_style_count();
+                document.remember_source_docx(source_bytes)?;
                 return Ok(document);
             }
             "odt" => {

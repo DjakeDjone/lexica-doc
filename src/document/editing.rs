@@ -2,7 +2,7 @@ use crate::document::text::char_to_byte_index;
 use crate::document::types::{
     append_text_run, CharacterStyle, DistanceFromText, DocumentImage, DocumentState,
     HorizontalPosition, ImageLayoutMode, ImageRendering, ListKind, Paragraph, ParagraphStyle,
-    TextRun, VerticalPosition, WrapMode, OBJECT_REPLACEMENT_CHAR,
+    TextRun, VerticalPosition, WrapMode, MIN_IMAGE_SIZE_POINTS, OBJECT_REPLACEMENT_CHAR,
 };
 use std::ops::Range;
 
@@ -220,8 +220,8 @@ impl DocumentState {
 
     pub fn resize_image_by_id(&mut self, id: usize, width_points: f32, height_points: f32) {
         if let Some(image) = self.image_by_id_mut(id) {
-            image.width_points = width_points.max(24.0);
-            image.height_points = height_points.max(24.0);
+            image.width_points = width_points.max(MIN_IMAGE_SIZE_POINTS);
+            image.height_points = height_points.max(MIN_IMAGE_SIZE_POINTS);
         }
     }
 

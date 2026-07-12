@@ -1,6 +1,6 @@
 use eframe::egui::{epaint::text::TextFormat, Align, Color32, FontFamily, FontId, Stroke};
 use serde::Serialize;
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use crate::document::text::{line_char_range, slice_char_range, word_char_range};
 
@@ -409,6 +409,8 @@ pub struct DocumentImage {
     pub allow_overlap: bool,
 }
 
+pub const MIN_IMAGE_SIZE_POINTS: f32 = 1.0;
+
 impl DocumentImage {
     pub fn offset_x_points(&self) -> f32 {
         self.horizontal_position.offset_points
@@ -646,6 +648,12 @@ pub struct ResolvedHeaderFooter<'a> {
 }
 
 #[derive(Clone)]
+pub(crate) struct SourceDocx {
+    bytes: Arc<[u8]>,
+    imported_state: Arc<[u8]>,
+}
+
+#[derive(Clone, Serialize)]
 pub struct DocumentState {
     pub title: String,
     pub runs: Vec<TextRun>,
@@ -670,9 +678,29 @@ pub struct DocumentState {
     pub different_odd_even_pages: bool,
     pub page_number_start: usize,
     pub sections: Vec<Section>,
+    #[serde(skip)]
+    pub(crate) source_docx: Option<SourceDocx>,
 }
 
 impl DocumentState {
+    pub(crate) fn remember_source_docx(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        self.source_docx = None;
+        let imported_state = serde_json::to_vec(self)
+            .map_err(|error| format!("failed to snapshot imported DOCX state: {error}"))?;
+        self.source_docx = Some(SourceDocx {
+            bytes: bytes.into(),
+            imported_state: imported_state.into(),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn unchanged_source_docx(&self) -> Option<&[u8]> {
+        let source = self.source_docx.as_ref()?;
+        let current_state = serde_json::to_vec(self).ok()?;
+        (current_state.as_slice() == source.imported_state.as_ref())
+            .then_some(source.bytes.as_ref())
+    }
+
     pub fn plain_text(&self) -> String {
         self.runs.iter().map(|run| run.text.as_str()).collect()
     }

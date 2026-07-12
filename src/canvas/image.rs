@@ -6,7 +6,9 @@ use eframe::egui::{
 
 use crate::{
     app::{CanvasState, ChangeHistory, ImageMoveDrag, ImageResizeDrag, ResizeHandle},
-    document::{DocumentImage, DocumentState, ImageLayoutMode, ImageRendering},
+    document::{
+        DocumentImage, DocumentState, ImageLayoutMode, ImageRendering, MIN_IMAGE_SIZE_POINTS,
+    },
     layout::document_points_to_screen_points,
 };
 
@@ -87,6 +89,19 @@ pub(super) fn paint_image_selection(painter: &egui::Painter, image_rect: Rect) {
             Stroke::new(1.5, SELECTION_COLOR),
             StrokeKind::Outside,
         );
+    }
+}
+
+pub(super) fn image_drag_preview_rect(
+    image_id: usize,
+    image_rect: Rect,
+    move_preview: Option<(usize, Rect, egui::Vec2)>,
+) -> Rect {
+    match move_preview {
+        Some((dragged_id, start_rect, offset)) if dragged_id == image_id => {
+            start_rect.translate(offset)
+        }
+        _ => image_rect,
     }
 }
 
@@ -294,8 +309,6 @@ pub(super) fn handle_image_interaction(
     (false, document_changed)
 }
 
-const MIN_IMAGE_SIZE_POINTS: f32 = 24.0;
-
 pub(super) fn resized_image_geometry(
     handle: ResizeHandle,
     start_w: f32,
@@ -481,23 +494,14 @@ pub(super) fn image_handle_hit(
         }
     }
 
-    for &(image_id, image_rect) in canvas.image_rects.iter().rev() {
-        if Some(image_id) == canvas.selected_image_id {
-            continue;
-        }
-        for &(handle, handle_rect) in &resize_handle_rects(image_rect) {
-            if handle_rect.expand(padding).contains(pointer_pos) {
-                return Some((image_id, handle));
-            }
-        }
-    }
-
     None
 }
 
 pub(super) fn image_display_size(image: &DocumentImage, _wrap_width: f32, zoom: f32) -> egui::Vec2 {
-    let width = document_points_to_screen_points(image.width_points.max(24.0), zoom);
-    let height = document_points_to_screen_points(image.height_points.max(24.0), zoom);
+    let width =
+        document_points_to_screen_points(image.width_points.max(MIN_IMAGE_SIZE_POINTS), zoom);
+    let height =
+        document_points_to_screen_points(image.height_points.max(MIN_IMAGE_SIZE_POINTS), zoom);
     egui::vec2(width, height)
 }
 

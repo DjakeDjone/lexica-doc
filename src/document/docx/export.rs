@@ -15,6 +15,9 @@ use crate::document::{
 };
 
 pub fn document_to_docx(document: &DocumentState) -> Result<Vec<u8>, String> {
+    if let Some(bytes) = document.unchanged_source_docx() {
+        return Ok(bytes.to_vec());
+    }
     DocxPackage::from_document(document)?.into_bytes()
 }
 

@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
-    io::{Cursor, Read},
+    fs,
+    io::{Cursor, Read, Write},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use super::numbering::parse_numbering_xml;
@@ -15,7 +17,7 @@ use crate::document::{
     OBJECT_REPLACEMENT_CHAR,
 };
 use eframe::egui::Color32;
-use zip::ZipArchive;
+use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
 
 #[test]
 fn parses_lists_alignment_and_page_settings_from_docx_xml() {
@@ -618,6 +620,54 @@ fn saves_docx_extension_to_readable_zip() {
     let _ = std::fs::remove_file(path);
 }
 
+#[test]
+fn no_op_save_preserves_the_original_docx_package_byte_for_byte() {
+    let generated = document_to_docx(&DocumentState::bootstrap()).expect("docx export");
+    let source = with_unknown_part(generated, "customXml/future-feature.bin", b"keep me");
+    let mut path = std::env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    path.push(format!("wors-lossless-round-trip-{stamp}.docx"));
+    fs::write(&path, &source).expect("write source fixture");
+
+    let document = DocumentState::load_from_path(&path).expect("import source DOCX");
+    let saved = document
+        .export_bytes_for_extension("docx")
+        .expect("no-op DOCX save");
+
+    assert_eq!(saved, source);
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn an_edited_import_is_exported_instead_of_returning_stale_source_bytes() {
+    let source = document_to_docx(&DocumentState::bootstrap()).expect("docx export");
+    let mut path = std::env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    path.push(format!("wors-edited-round-trip-{stamp}.docx"));
+    fs::write(&path, &source).expect("write source fixture");
+
+    let mut document = DocumentState::load_from_path(&path).expect("import source DOCX");
+    document.insert_text(
+        document.total_chars(),
+        " changed",
+        CharacterStyle::default(),
+    );
+    let saved = document
+        .export_bytes_for_extension("docx")
+        .expect("edited DOCX save");
+
+    assert_ne!(saved, source);
+    let reparsed = super::docx_to_document(&saved).expect("reparse edited DOCX");
+    assert!(reparsed.runs.iter().any(|run| run.text.contains("changed")));
+    let _ = fs::remove_file(path);
+}
+
 fn rich_export_document() -> DocumentState {
     let inline_image = test_docx_image(1, ImageLayoutMode::Inline, WrapMode::Inline);
     let mut floating_image = test_docx_image(2, ImageLayoutMode::Floating, WrapMode::Square);
@@ -766,4 +816,25 @@ fn zip_text(archive: &mut ZipArchive<Cursor<Vec<u8>>>, path: &str) -> String {
     file.read_to_string(&mut text)
         .unwrap_or_else(|_| panic!("failed to read {path}"));
     text
+}
+
+fn with_unknown_part(bytes: Vec<u8>, path: &str, contents: &[u8]) -> Vec<u8> {
+    let mut source = ZipArchive::new(Cursor::new(bytes)).expect("source zip");
+    let mut output = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(&mut output);
+    let options = SimpleFileOptions::default();
+
+    for index in 0..source.len() {
+        let mut file = source.by_index(index).expect("source part");
+        writer
+            .start_file(file.name(), options)
+            .expect("copy part header");
+        std::io::copy(&mut file, &mut writer).expect("copy part body");
+    }
+    writer
+        .start_file(path, options)
+        .expect("unknown part header");
+    writer.write_all(contents).expect("unknown part body");
+    writer.finish().expect("finish augmented DOCX");
+    output.into_inner()
 }

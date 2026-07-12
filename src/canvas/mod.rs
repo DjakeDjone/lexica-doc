@@ -34,8 +34,8 @@ use crate::{
 
 use editor_input::{apply_viewport_input, handle_keyboard_input, handle_pointer_interaction};
 use image::{
-    handle_image_interaction, image_body_hit, image_handle_hit, paint_image_on_page,
-    paint_image_selection,
+    handle_image_interaction, image_body_hit, image_drag_preview_rect, image_handle_hit,
+    paint_image_on_page, paint_image_selection,
 };
 use page_layout::{layout_page_stack, PageLayout};
 use palette::canvas_palette;
@@ -183,6 +183,13 @@ pub fn paint_document_canvas(
     let mut new_table_cell_rects: Vec<(usize, usize, usize, Rect)> = Vec::new();
     let mut new_table_cell_content_rects: Vec<(usize, usize, usize, Rect)> = Vec::new();
     let mut new_table_resize_handles: Vec<TableResizeHandleRect> = Vec::new();
+    let move_preview = canvas.move_drag.as_ref().map(|drag| {
+        (
+            drag.image_id,
+            drag.start_rect,
+            drag.current_ptr - drag.start_ptr,
+        )
+    });
 
     for (page_index, page) in page_layout.pages.iter().enumerate() {
         let shadow_offset = egui::vec2(
@@ -242,7 +249,7 @@ pub fn paint_document_canvas(
             if image_y < page.start_y || image_y > page.end_y {
                 return None;
             }
-            Some(Rect::from_min_size(
+            let image_rect = Rect::from_min_size(
                 egui::pos2(
                     page.content_rect.left()
                         + row.pos.x
@@ -253,6 +260,11 @@ pub fn paint_document_canvas(
                         + document_points_to_screen_points(image.image.offset_y_points(), zoom),
                 ),
                 image.size,
+            );
+            Some(image_drag_preview_rect(
+                image.image.id,
+                image_rect,
+                move_preview,
             ))
         };
 
@@ -451,29 +463,6 @@ pub fn paint_document_canvas(
         );
     }
     update_canvas_hover_cursor(ui, &response, canvas, &page_layout);
-
-    // Draw ghost image if dragging
-    if let Some(move_drag) = &canvas.move_drag {
-        if move_drag.current_ptr != move_drag.start_ptr {
-            let offset = move_drag.current_ptr - move_drag.start_ptr;
-            let ghost_rect = move_drag.start_rect.translate(offset);
-            if let Some(image_layout) = document_layout
-                .images
-                .iter()
-                .find(|i| i.image.id == move_drag.image_id)
-            {
-                paint_image_on_page(
-                    ui,
-                    canvas,
-                    &painter,
-                    image_layout,
-                    ghost_rect,
-                    &palette,
-                    0.5,
-                );
-            }
-        }
-    }
 
     // Draw selection border + handles with unclipped painter so they aren't cut at page margins
     if let Some((_, selected_rect)) = canvas
