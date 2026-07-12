@@ -342,7 +342,7 @@ fn write_image(
         images.push(OdtImage {
             path: path.clone(),
             media_type: image_mime_type_for_extension(ext),
-            bytes: image.bytes.clone(),
+            bytes: image.bytes.to_vec(),
         });
         path
     });

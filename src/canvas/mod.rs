@@ -4,6 +4,8 @@ mod page_layout;
 mod palette;
 mod table;
 
+use std::sync::Arc;
+
 pub mod header_footer;
 pub mod image_wrap;
 pub mod layout;
@@ -48,6 +50,8 @@ use header_footer::{
     header_footer_hit, paint_active_header_footer_editor, paint_page_header_footer,
 };
 pub(crate) use image_wrap::ImageLayout;
+pub(crate) use layout::cached_layout_document;
+#[cfg(test)]
 pub(crate) use layout::layout_document;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -65,17 +69,85 @@ pub fn paint_document_canvas(
     history: &mut ChangeHistory,
     grammar_errors: &[GrammarError],
 ) -> CanvasOutput {
-    let mut output = CanvasOutput::default();
-    let palette = canvas_palette(theme_mode);
     let viewport = ui.available_rect_before_wrap();
     let editor_id = Id::new("document_canvas");
     let response = ui.interact(viewport, editor_id, Sense::click_and_drag());
-    let painter = ui.painter_at(viewport);
     apply_viewport_input(ui, &response, canvas);
-    let scrollbar_pointer_captured = handle_scrollbar_input(ui, viewport, canvas);
+    let now = ui.input(|input| input.time);
     if canvas.zoom_mode == crate::app::ZoomMode::FitPage {
-        canvas.zoom = fit_page_zoom(viewport, document.default_page_setup().page_size);
+        let zoom = fit_page_zoom(viewport, document.default_page_setup().page_size);
+        if zoom != canvas.zoom {
+            canvas.zoom = zoom;
+            canvas.last_zoom_input_time = now;
+        }
     }
+
+    const ZOOM_SETTLE_SECONDS: f64 = 0.12;
+    let display_zoom = canvas.zoom;
+    if now - canvas.last_zoom_input_time >= ZOOM_SETTLE_SECONDS {
+        canvas.layout_zoom = display_zoom;
+    } else {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(
+                (ZOOM_SETTLE_SECONDS - (now - canvas.last_zoom_input_time)).max(0.0),
+            ));
+    }
+    canvas.zoom = canvas.layout_zoom;
+
+    let visual_scale = display_zoom / canvas.layout_zoom.max(0.01);
+    let output = if (visual_scale - 1.0).abs() > 0.001 {
+        let center = viewport.center().to_vec2();
+        let transform = egui::emath::TSTransform::from_translation(center)
+            * egui::emath::TSTransform::from_scaling(visual_scale)
+            * egui::emath::TSTransform::from_translation(-center);
+        ui.with_visual_transform(transform, |ui| {
+            paint_document_canvas_frame(
+                ui,
+                document,
+                canvas,
+                theme_mode,
+                history,
+                grammar_errors,
+                viewport,
+                response,
+                editor_id,
+            )
+        })
+        .inner
+    } else {
+        paint_document_canvas_frame(
+            ui,
+            document,
+            canvas,
+            theme_mode,
+            history,
+            grammar_errors,
+            viewport,
+            response,
+            editor_id,
+        )
+    };
+
+    canvas.zoom = display_zoom;
+    output
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_document_canvas_frame(
+    ui: &mut egui::Ui,
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    theme_mode: ThemeMode,
+    history: &mut ChangeHistory,
+    grammar_errors: &[GrammarError],
+    viewport: Rect,
+    response: egui::Response,
+    editor_id: Id,
+) -> CanvasOutput {
+    let mut output = CanvasOutput::default();
+    let palette = canvas_palette(theme_mode);
+    let painter = ui.painter_at(viewport);
+    let scrollbar_pointer_captured = handle_scrollbar_input(ui, viewport, canvas);
 
     painter.rect_filled(viewport, CornerRadius::ZERO, palette.canvas_bg);
 
@@ -111,11 +183,11 @@ pub fn paint_document_canvas(
     }
 
     let (mut document_layout, page_layout) = if has_focus && canvas.active_header_footer.is_none() {
-        let dl = layout_document(ui, document, canvas, content_size.x);
+        let dl = cached_layout_document(ui, document, canvas, content_size.x);
         let changed = handle_keyboard_input(ui, document, canvas, &dl.galley, history);
         if changed {
             output.text_changed = true;
-            let dl2 = layout_document(ui, document, canvas, content_size.x);
+            let dl2 = cached_layout_document(ui, document, canvas, content_size.x);
             let pl = layout_page_stack(
                 viewport,
                 document,
@@ -137,7 +209,7 @@ pub fn paint_document_canvas(
             (dl, pl)
         }
     } else {
-        let dl = layout_document(ui, document, canvas, content_size.x);
+        let dl = cached_layout_document(ui, document, canvas, content_size.x);
         let pl = layout_page_stack(
             viewport,
             document,
@@ -173,7 +245,7 @@ pub fn paint_document_canvas(
 
     if has_focus && !canvas.selection.is_empty() {
         paint_text_selection(
-            &mut document_layout.galley,
+            &mut Arc::make_mut(&mut document_layout).galley,
             ui.visuals(),
             &canvas.selection,
             None,
@@ -193,6 +265,10 @@ pub fn paint_document_canvas(
     });
 
     for (page_index, page) in page_layout.pages.iter().enumerate() {
+        if !page.page_rect.intersects(viewport) {
+            continue;
+        }
+
         let shadow_offset = egui::vec2(
             document_points_to_screen_points(6.0, canvas.zoom),
             document_points_to_screen_points(8.0, canvas.zoom),

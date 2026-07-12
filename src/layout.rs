@@ -14,10 +14,14 @@ pub fn document_points_to_pixels(document_points: f32, pixels_per_point: f32, zo
     document_points * viewport_scale(pixels_per_point, zoom)
 }
 
+pub fn quantize_zoom(zoom: f32) -> f32 {
+    (zoom * 100.0).round() / 100.0
+}
+
 pub fn fit_page_zoom(viewport: Rect, page_size: PageSize) -> f32 {
     let fit_width = viewport.width() / page_size.width_points.max(1.0);
     let fit_height = viewport.height() / page_size.height_points.max(1.0);
-    (fit_width.min(fit_height) * 0.92).clamp(0.25, 3.0)
+    quantize_zoom((fit_width.min(fit_height) * 0.92).clamp(0.25, 3.0))
 }
 
 pub fn page_size_in_screen_points(page_size: PageSize, zoom: f32) -> Vec2 {

@@ -14,7 +14,7 @@ use super::{
 fn test_image(id: usize) -> DocumentImage {
     DocumentImage {
         id,
-        bytes: vec![1, 2, 3],
+        bytes: vec![1, 2, 3].into(),
         alt_text: format!("image-{id}"),
         width_points: 120.0,
         height_points: 60.0,
@@ -208,7 +208,7 @@ fn inserts_block_image_as_its_own_paragraph() {
         6,
         DocumentImage {
             id: 1,
-            bytes: vec![1, 2, 3],
+            bytes: vec![1, 2, 3].into(),
             alt_text: "diagram".to_owned(),
             width_points: 120.0,
             height_points: 60.0,

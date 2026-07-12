@@ -228,7 +228,7 @@ pub(crate) fn resolve_drawing(
 
     let image = DocumentImage {
         id: *next_image_id,
-        bytes,
+        bytes: bytes.into(),
         alt_text,
         width_points,
         height_points,

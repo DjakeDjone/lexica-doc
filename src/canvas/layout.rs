@@ -1,5 +1,10 @@
 use eframe::egui::{self, Color32, FontId};
-use std::sync::Arc;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::Hasher,
+    io::{self, Write},
+    sync::Arc,
+};
 
 use crate::app::CanvasState;
 use crate::document::{
@@ -14,6 +19,7 @@ use super::image_wrap::{
 };
 use super::table::table_row_heights_screen;
 
+#[derive(Clone)]
 pub struct DocumentLayout {
     pub galley: Arc<egui::Galley>,
     pub list_markers: Vec<ListMarkerLayout>,
@@ -23,11 +29,13 @@ pub struct DocumentLayout {
     pub paragraph_start_rows: Vec<usize>,
 }
 
+#[derive(Clone)]
 pub struct TableLayout {
     pub row_index: usize,
     pub table: DocumentTable,
 }
 
+#[derive(Clone)]
 pub struct ListMarkerLayout {
     pub row_index: usize,
     pub text: String,
@@ -41,6 +49,95 @@ pub struct ParagraphSpacingRange {
     pub row_end: usize,
     pub top: f32,
     pub bottom: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DocumentLayoutKey {
+    document_hash: u64,
+    document_size: u64,
+    zoom: u32,
+    wrap_width: u32,
+    pixels_per_point: u32,
+    completion_cursor: usize,
+}
+
+#[derive(Clone)]
+struct CachedDocumentLayout {
+    key: DocumentLayoutKey,
+    layout: Arc<DocumentLayout>,
+}
+
+#[derive(Default)]
+struct HashWriter {
+    hasher: DefaultHasher,
+    bytes_written: u64,
+}
+
+impl Write for HashWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.hasher.write(bytes);
+        self.bytes_written += bytes.len() as u64;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn document_layout_key(
+    document: &DocumentState,
+    canvas: &CanvasState,
+    wrap_width: f32,
+    pixels_per_point: f32,
+) -> DocumentLayoutKey {
+    let mut writer = HashWriter::default();
+    let _ = serde_json::to_writer(&mut writer, document);
+    DocumentLayoutKey {
+        document_hash: writer.hasher.finish(),
+        document_size: writer.bytes_written,
+        zoom: canvas.zoom.to_bits(),
+        wrap_width: wrap_width.to_bits(),
+        pixels_per_point: pixels_per_point.to_bits(),
+        completion_cursor: canvas
+            .ai_completion
+            .as_ref()
+            .map_or(usize::MAX, |_| canvas.selection.primary.index),
+    }
+}
+
+pub fn cached_layout_document(
+    ui: &mut egui::Ui,
+    document: &DocumentState,
+    canvas: &CanvasState,
+    wrap_width: f32,
+) -> Arc<DocumentLayout> {
+    let key = document_layout_key(
+        document,
+        canvas,
+        wrap_width,
+        ui.painter().pixels_per_point(),
+    );
+    let cache_id = egui::Id::new("document_layout_cache");
+    if let Some(cached) = ui
+        .ctx()
+        .data(|data| data.get_temp::<CachedDocumentLayout>(cache_id))
+        .filter(|cached| cached.key == key)
+    {
+        return cached.layout;
+    }
+
+    let layout = Arc::new(layout_document(ui, document, canvas, wrap_width));
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            cache_id,
+            CachedDocumentLayout {
+                key,
+                layout: layout.clone(),
+            },
+        );
+    });
+    layout
 }
 
 pub fn layout_document(

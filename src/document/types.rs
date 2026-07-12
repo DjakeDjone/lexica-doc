@@ -392,7 +392,7 @@ impl Default for DistanceFromText {
 pub struct DocumentImage {
     pub id: usize,
     #[serde(skip)]
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<[u8]>,
     pub alt_text: String,
     pub width_points: f32,
     pub height_points: f32,

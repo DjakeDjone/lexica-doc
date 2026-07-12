@@ -175,7 +175,7 @@ fn load_image_for_document(
 
     Ok(DocumentImage {
         id: next_id,
-        bytes,
+        bytes: bytes.into(),
         alt_text: path
             .file_stem()
             .and_then(|name| name.to_str())

@@ -9,6 +9,7 @@ use crate::{
     },
     layout::fit_page_zoom,
 };
+use std::sync::Arc;
 
 /// Run `layout_document` inside a headless egui context and return
 /// the layout result for assertion.
@@ -25,6 +26,41 @@ fn run_headless_layout(
     });
 
     layout.expect("layout_document should have been called inside the egui frame")
+}
+
+#[test]
+fn unchanged_document_layout_is_reused() {
+    let ctx = egui::Context::default();
+    let mut document = make_document(
+        vec![TextRun {
+            text: "cached layout".to_owned(),
+            style: CharacterStyle::default(),
+        }],
+        vec![ParagraphStyle::default()],
+        vec![None],
+    );
+    let mut canvas = CanvasState::default();
+    let mut layouts = Vec::new();
+
+    for _ in 0..2 {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            layouts.push(cached_layout_document(ui, &document, &canvas, 500.0));
+        });
+    }
+
+    assert!(Arc::ptr_eq(&layouts[0], &layouts[1]));
+
+    canvas.zoom = 1.25;
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        layouts.push(cached_layout_document(ui, &document, &canvas, 500.0));
+    });
+    assert!(!Arc::ptr_eq(&layouts[1], &layouts[2]));
+
+    document.insert_text(0, "updated ", CharacterStyle::default());
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        layouts.push(cached_layout_document(ui, &document, &canvas, 500.0));
+    });
+    assert!(!Arc::ptr_eq(&layouts[2], &layouts[3]));
 }
 
 fn make_document(
@@ -84,7 +120,7 @@ fn make_document(
 fn make_test_image(id: usize, width: f32, height: f32, wrap_mode: WrapMode) -> DocumentImage {
     DocumentImage {
         id,
-        bytes: vec![],
+        bytes: vec![].into(),
         alt_text: "test".to_owned(),
         width_points: width,
         height_points: height,
@@ -516,6 +552,63 @@ fn fit_page_zoom_uses_manual_override_rules() {
     canvas.zoom = (canvas.zoom * 1.1).clamp(0.5, 3.0);
     assert_eq!(canvas.zoom_mode, ZoomMode::Manual);
     assert!(canvas.zoom > fit);
+}
+
+#[test]
+fn view_scaling_accumulates_small_deltas_before_reflowing() {
+    let mut canvas = CanvasState::default();
+
+    canvas.scale_view(1.002);
+    canvas.scale_view(1.002);
+    assert_eq!(canvas.zoom, 1.0);
+
+    canvas.scale_view(1.002);
+    assert_eq!(canvas.zoom, 1.01);
+}
+
+#[test]
+fn zoom_gesture_defers_exact_layout_until_it_settles() {
+    let ctx = egui::Context::default();
+    let mut document = make_document(
+        vec![TextRun {
+            text: "large document preview".to_owned(),
+            style: CharacterStyle::default(),
+        }],
+        vec![ParagraphStyle::default()],
+        vec![None],
+    );
+    let mut canvas = CanvasState::default();
+    canvas.zoom = 1.5;
+    canvas.last_zoom_input_time = 10.0;
+    let mut history = ChangeHistory::default();
+
+    let mut input = egui::RawInput::default();
+    input.time = Some(10.0);
+    let _ = ctx.run_ui(input, |ui| {
+        paint_document_canvas(
+            ui,
+            &mut document,
+            &mut canvas,
+            ThemeMode::Light,
+            &mut history,
+            &[],
+        );
+    });
+    assert_eq!(canvas.layout_zoom, 1.0);
+
+    let mut input = egui::RawInput::default();
+    input.time = Some(10.2);
+    let _ = ctx.run_ui(input, |ui| {
+        paint_document_canvas(
+            ui,
+            &mut document,
+            &mut canvas,
+            ThemeMode::Light,
+            &mut history,
+            &[],
+        );
+    });
+    assert_eq!(canvas.layout_zoom, 1.5);
 }
 
 #[test]

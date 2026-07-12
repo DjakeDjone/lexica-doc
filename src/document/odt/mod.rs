@@ -83,7 +83,7 @@ mod tests {
         let image = imported.paragraph_images[0]
             .as_ref()
             .expect("image imports");
-        assert_eq!(image.bytes, PNG_1X1);
+        assert_eq!(image.bytes.as_ref(), PNG_1X1);
         let table = imported.paragraph_tables[1]
             .as_ref()
             .expect("table imports");
@@ -93,7 +93,7 @@ mod tests {
     fn test_image() -> DocumentImage {
         DocumentImage {
             id: 1,
-            bytes: PNG_1X1.to_vec(),
+            bytes: PNG_1X1.to_vec().into(),
             alt_text: "pixel".to_owned(),
             width_points: 12.0,
             height_points: 12.0,

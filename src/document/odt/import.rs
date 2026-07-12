@@ -354,7 +354,7 @@ fn parse_frame_image(
 
     Ok(Some(DocumentImage {
         id,
-        bytes,
+        bytes: bytes.into(),
         alt_text,
         width_points,
         height_points,

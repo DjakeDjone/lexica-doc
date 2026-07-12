@@ -162,7 +162,7 @@ fn imports_image_paragraphs_from_docx_xml() {
     assert_eq!(image.alt_text, "Logo");
     assert_eq!(image.width_points, 72.0);
     assert_eq!(image.height_points, 36.0);
-    assert_eq!(image.bytes, vec![1, 2, 3, 4]);
+    assert_eq!(image.bytes.as_ref(), [1, 2, 3, 4]);
 }
 
 #[test]
@@ -790,7 +790,7 @@ fn rich_export_document() -> DocumentState {
 fn test_docx_image(id: usize, layout_mode: ImageLayoutMode, wrap_mode: WrapMode) -> DocumentImage {
     DocumentImage {
         id,
-        bytes: b"\x89PNG\r\n\x1a\nfake".to_vec(),
+        bytes: b"\x89PNG\r\n\x1a\nfake".to_vec().into(),
         alt_text: format!("image-{id}"),
         width_points: 72.0,
         height_points: 36.0,

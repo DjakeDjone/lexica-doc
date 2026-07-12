@@ -74,6 +74,9 @@ pub struct ActiveHeaderFooter {
 
 pub struct CanvasState {
     pub zoom: f32,
+    pub(crate) zoom_target: f32,
+    pub(crate) layout_zoom: f32,
+    pub(crate) last_zoom_input_time: f64,
     pub zoom_mode: ZoomMode,
     pub imported_docx_view: bool,
     pub pan: egui::Vec2,
@@ -106,6 +109,9 @@ impl Default for CanvasState {
     fn default() -> Self {
         Self {
             zoom: 1.0,
+            zoom_target: 1.0,
+            layout_zoom: 1.0,
+            last_zoom_input_time: f64::NEG_INFINITY,
             zoom_mode: ZoomMode::Manual,
             imported_docx_view: false,
             pan: egui::Vec2::ZERO,
@@ -133,5 +139,19 @@ impl Default for CanvasState {
             ai_completion: None,
             ai_working: false,
         }
+    }
+}
+
+impl CanvasState {
+    pub fn scale_view(&mut self, delta: f32) {
+        if !delta.is_finite() || delta <= 0.0 {
+            return;
+        }
+
+        if (crate::layout::quantize_zoom(self.zoom_target) - self.zoom).abs() > 0.001 {
+            self.zoom_target = self.zoom;
+        }
+        self.zoom_target = (self.zoom_target * delta).clamp(0.5, 3.0);
+        self.zoom = crate::layout::quantize_zoom(self.zoom_target);
     }
 }

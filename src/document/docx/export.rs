@@ -116,7 +116,7 @@ impl PackageBuilder {
         } else {
             let ext = image_extension(&image.bytes);
             let path = format!("word/media/image-{}.{}", image.id, ext);
-            self.add_binary_part(&path, image.bytes.clone());
+            self.add_binary_part(&path, image.bytes.to_vec());
             self.image_paths_by_id.insert(image.id, path.clone());
             path
         };
