@@ -66,7 +66,7 @@ impl PageLayout {
 pub(super) fn layout_page_stack(
     viewport: Rect,
     document: &DocumentState,
-    canvas: &CanvasState,
+    canvas: &mut CanvasState,
     galley: &egui::Galley,
     manual_page_break_rows: &[usize],
     paragraph_start_rows: &[usize],
@@ -86,6 +86,20 @@ pub(super) fn layout_page_stack(
     let page_count = page_ranges.len().max(1);
     let stack_height =
         page_count as f32 * page_size.y + (page_count.saturating_sub(1) as f32 * page_gap);
+
+    let pan_before_clamp = canvas.pan;
+    canvas.scroll_range = clamp_pan(
+        viewport,
+        page_size.x,
+        stack_height,
+        page_gap,
+        &mut canvas.pan,
+    );
+    for axis in 0..2 {
+        if canvas.pan[axis] != pan_before_clamp[axis] {
+            canvas.scroll_velocity[axis] = 0.0;
+        }
+    }
 
     let top = if stack_height < viewport.height() {
         viewport.center().y - stack_height * 0.5 + canvas.pan.y
@@ -131,6 +145,45 @@ pub(super) fn layout_page_stack(
     }
 
     PageLayout { pages }
+}
+
+fn clamp_pan(
+    viewport: Rect,
+    page_width: f32,
+    stack_height: f32,
+    margin: f32,
+    pan: &mut egui::Vec2,
+) -> egui::Vec2 {
+    let horizontal_overflow = ((page_width - viewport.width()) * 0.5).max(0.0);
+    pan.x = pan.x.clamp(-horizontal_overflow, horizontal_overflow);
+
+    let vertical_overflow = if stack_height < viewport.height() {
+        0.0
+    } else {
+        stack_height + margin * 2.0 - viewport.height()
+    };
+    pan.y = pan.y.clamp(-vertical_overflow, 0.0);
+    egui::vec2(horizontal_overflow, vertical_overflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_pan;
+
+    #[test]
+    fn pan_stays_within_page_stack() {
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut pan = egui::vec2(500.0, -2_000.0);
+
+        let range = clamp_pan(viewport, 1_000.0, 1_200.0, 24.0, &mut pan);
+
+        assert_eq!(pan, egui::vec2(100.0, -648.0));
+        assert_eq!(range, egui::vec2(100.0, 648.0));
+
+        let range = clamp_pan(viewport, 500.0, 400.0, 24.0, &mut pan);
+        assert_eq!(pan, egui::Vec2::ZERO);
+        assert_eq!(range, egui::Vec2::ZERO);
+    }
 }
 
 fn section_start_positions(

@@ -72,6 +72,7 @@ pub fn paint_document_canvas(
     let response = ui.interact(viewport, editor_id, Sense::click_and_drag());
     let painter = ui.painter_at(viewport);
     apply_viewport_input(ui, &response, canvas);
+    let scrollbar_pointer_captured = handle_scrollbar_input(ui, viewport, canvas);
     if canvas.zoom_mode == crate::app::ZoomMode::FitPage {
         canvas.zoom = fit_page_zoom(viewport, document.default_page_setup().page_size);
     }
@@ -403,6 +404,8 @@ pub fn paint_document_canvas(
         }
     }
 
+    paint_scrollbar(&painter, viewport, canvas, palette.page_border);
+
     if paint_active_header_footer_editor(
         ui,
         document,
@@ -437,12 +440,12 @@ pub fn paint_document_canvas(
     canvas.table_cell_content_rects = new_table_cell_content_rects;
     canvas.table_resize_handles = new_table_resize_handles;
 
-    let (table_pointer_captured, table_document_changed) = if canvas.active_header_footer.is_some()
-    {
-        (true, false)
-    } else {
-        handle_table_interaction(ui, &response, canvas, document, history)
-    };
+    let (table_pointer_captured, table_document_changed) =
+        if scrollbar_pointer_captured || canvas.active_header_footer.is_some() {
+            (true, false)
+        } else {
+            handle_table_interaction(ui, &response, canvas, document, history)
+        };
     output.text_changed |= table_document_changed;
 
     let (image_pointer_captured, image_document_changed) = if table_pointer_captured {
@@ -462,7 +465,9 @@ pub fn paint_document_canvas(
             document,
         );
     }
-    update_canvas_hover_cursor(ui, &response, canvas, &page_layout);
+    if !scrollbar_pointer_captured {
+        update_canvas_hover_cursor(ui, &response, canvas, &page_layout);
+    }
 
     // Draw selection border + handles with unclipped painter so they aren't cut at page margins
     if let Some((_, selected_rect)) = canvas
@@ -516,6 +521,75 @@ pub fn paint_document_canvas(
     }
 
     output
+}
+
+fn scrollbar_rects(viewport: Rect, canvas: &CanvasState) -> Option<(Rect, Rect, f32)> {
+    if canvas.scroll_range.y <= 0.0 {
+        return None;
+    }
+
+    let track = Rect::from_min_max(
+        egui::pos2(viewport.right() - 14.0, viewport.top() + 4.0),
+        egui::pos2(viewport.right() - 4.0, viewport.bottom() - 4.0),
+    );
+    let content_height = viewport.height() + canvas.scroll_range.y;
+    let thumb_height =
+        (track.height() * viewport.height() / content_height).clamp(32.0, track.height());
+    let travel = track.height() - thumb_height;
+    let progress = (-canvas.pan.y / canvas.scroll_range.y).clamp(0.0, 1.0);
+    let thumb = Rect::from_min_size(
+        egui::pos2(track.left(), track.top() + travel * progress),
+        egui::vec2(track.width(), thumb_height),
+    );
+    Some((track, thumb, travel))
+}
+
+fn handle_scrollbar_input(ui: &mut egui::Ui, viewport: Rect, canvas: &mut CanvasState) -> bool {
+    let Some((track, thumb, travel)) = scrollbar_rects(viewport, canvas) else {
+        return false;
+    };
+    let response = ui.interact(
+        track.expand(2.0),
+        Id::new("document_scrollbar"),
+        Sense::click_and_drag(),
+    );
+
+    if response.drag_started() {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            canvas.scrollbar_drag_offset = if thumb.contains(pointer) {
+                pointer.y - thumb.top()
+            } else {
+                thumb.height() * 0.5
+            };
+        }
+    }
+
+    if response.dragged() || response.clicked() {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            let progress = if travel > 0.0 {
+                ((pointer.y - track.top() - canvas.scrollbar_drag_offset) / travel).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            canvas.pan.y = -progress * canvas.scroll_range.y;
+            canvas.scroll_velocity = egui::Vec2::ZERO;
+            ui.ctx().request_repaint();
+        }
+    }
+
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    response.hovered() || response.dragged()
+}
+
+fn paint_scrollbar(painter: &egui::Painter, viewport: Rect, canvas: &CanvasState, color: Color32) {
+    let Some((track, thumb, _)) = scrollbar_rects(viewport, canvas) else {
+        return;
+    };
+    painter.rect_filled(track, CornerRadius::same(5), color.gamma_multiply(0.25));
+    painter.rect_filled(thumb, CornerRadius::same(5), color.gamma_multiply(0.8));
 }
 
 fn update_canvas_hover_cursor(

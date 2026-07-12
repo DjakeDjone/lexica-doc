@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use eframe::egui::{
     self, epaint::text::cursor::CCursor, text_selection::CCursorRange, Event, Key, Modifiers,
+    MouseWheelUnit, TouchPhase,
 };
 
 use crate::{
@@ -22,6 +23,7 @@ pub(super) fn apply_viewport_input(
 
     let scroll_delta = ui.input(|input| input.smooth_scroll_delta());
     if ui.input(|input| input.modifiers.command) {
+        canvas.scroll_velocity = egui::Vec2::ZERO;
         let zoom_delta = ui.input(|input| input.zoom_delta());
         if zoom_delta != 1.0 {
             canvas.zoom_mode = ZoomMode::Manual;
@@ -29,6 +31,36 @@ pub(super) fn apply_viewport_input(
         }
     } else if scroll_delta != egui::Vec2::ZERO {
         canvas.pan += egui::vec2(scroll_delta.x, scroll_delta.y);
+        let touchpad_moved = ui.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::MouseWheel {
+                        unit: MouseWheelUnit::Point,
+                        phase: TouchPhase::Move,
+                        ..
+                    }
+                )
+            })
+        });
+        if touchpad_moved {
+            let dt = ui.input(|input| input.stable_dt).clamp(1.0 / 240.0, 0.1);
+            canvas.scroll_velocity = canvas.scroll_velocity * 0.65 + scroll_delta / dt * 0.35;
+        } else {
+            canvas.scroll_velocity = egui::Vec2::ZERO;
+        }
+    } else if canvas.scroll_velocity != egui::Vec2::ZERO {
+        let dt = ui.input(|input| input.stable_dt).min(0.1);
+        canvas.pan += canvas.scroll_velocity * dt;
+        for axis in 0..2 {
+            let friction = 1_200.0 * dt;
+            if canvas.scroll_velocity[axis].abs() <= friction.max(20.0) {
+                canvas.scroll_velocity[axis] = 0.0;
+            } else {
+                canvas.scroll_velocity[axis] -= friction * canvas.scroll_velocity[axis].signum();
+            }
+        }
+        ui.ctx().request_repaint();
     }
 }
 
