@@ -32,6 +32,8 @@ pub struct DocumentLayout {
 #[derive(Clone)]
 pub struct TableLayout {
     pub row_index: usize,
+    pub height: f32,
+    pub row_heights: Vec<f32>,
     pub table: DocumentTable,
 }
 
@@ -311,12 +313,16 @@ pub fn layout_document(
         if let Some(table) = paragraph.table.clone().filter(|_| !has_visible_text) {
             let table_width =
                 document_points_to_screen_points(table.total_width_points(), canvas.zoom);
-            let table_height: f32 = table_row_heights_screen(painter, &table, canvas.zoom)
-                .into_iter()
-                .sum();
+            let row_heights = table_row_heights_screen(painter, &table, canvas.zoom);
+            let table_height: f32 = row_heights.iter().sum();
             let table_size = egui::vec2(table_width.min(paragraph_wrap_width), table_height);
             if reserve_block_image_space(&mut paragraph_galley, table_size) {
-                tables.push(TableLayout { row_index, table });
+                tables.push(TableLayout {
+                    row_index,
+                    height: table_height,
+                    row_heights,
+                    table,
+                });
             }
         } else if let Some(image) = paragraph.image.clone().filter(|_| !has_visible_text) {
             let wrap_mode = image.wrap_mode;

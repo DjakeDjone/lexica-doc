@@ -608,6 +608,33 @@ fn saves_pdf_extension() {
 }
 
 #[test]
+fn imports_markdown_tables_as_tables() {
+    let mut path = std::env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    path.push(format!("wors-markdown-{stamp}.md"));
+    fs::write(
+        &path,
+        "# Injuries\n\n| Kind | Airway |\n|---|---|\n| **Skull** | blocked |\n\n## Next",
+    )
+    .expect("markdown fixture");
+
+    let document = DocumentState::load_from_path(&path).expect("markdown import");
+    let table = document.paragraph_tables.iter().flatten().next().unwrap();
+
+    assert_eq!(table.rows[0][0].plain_text(), "Kind");
+    assert_eq!(table.rows[0][1].plain_text(), "Airway");
+    assert_eq!(table.rows[1][0].plain_text(), "Skull");
+    assert!(table.rows[1][0].runs[0].style.bold);
+    assert!(document.plain_text().contains("Next"));
+    assert!(!document.plain_text().contains("KindAirway"));
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn test_print_html_css() {
     let mut doc = DocumentState::bootstrap();
     let style = CharacterStyle {

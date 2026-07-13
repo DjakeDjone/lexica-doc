@@ -1,9 +1,17 @@
 use eframe::egui;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::document::{CharacterStyle, FontChoice, TextRun};
+use crate::document::{
+    CharacterStyle, DocumentTable, FontChoice, PageMargins, PageSize, TableCell, TextRun,
+    OBJECT_REPLACEMENT_CHAR,
+};
 
-pub(super) fn markdown_to_runs(source: &str) -> Vec<TextRun> {
+pub(super) struct MarkdownImport {
+    pub runs: Vec<TextRun>,
+    pub paragraph_tables: Vec<Option<DocumentTable>>,
+}
+
+pub(super) fn import_markdown(source: &str) -> MarkdownImport {
     let parser = Parser::new_ext(
         source,
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_TABLES,
@@ -14,6 +22,12 @@ pub(super) fn markdown_to_runs(source: &str) -> Vec<TextRun> {
     let mut pending_prefix = String::new();
     let mut heading_level = None;
     let mut list_depth = 0usize;
+    let mut tables = Vec::new();
+    let mut table_columns = 0usize;
+    let mut table_rows = Vec::new();
+    let mut table_row = None;
+    let mut table_cell = None;
+    let placeholder = OBJECT_REPLACEMENT_CHAR.to_string();
 
     for event in parser {
         match event {
@@ -43,6 +57,17 @@ pub(super) fn markdown_to_runs(source: &str) -> Vec<TextRun> {
                     Tag::List(_) => {
                         list_depth += 1;
                     }
+                    Tag::Table(alignments) => {
+                        table_columns = alignments.len();
+                        table_rows.clear();
+                        append_plain(
+                            &mut runs,
+                            &placeholder,
+                            CharacterStyle::default(),
+                        );
+                    }
+                    Tag::TableHead | Tag::TableRow => table_row = Some(Vec::new()),
+                    Tag::TableCell => table_cell = Some(Vec::new()),
                     _ => {}
                 }
                 stack.push(next);
@@ -67,6 +92,40 @@ pub(super) fn markdown_to_runs(source: &str) -> Vec<TextRun> {
                             *stack.last().unwrap_or(&CharacterStyle::default()),
                         );
                     }
+                    TagEnd::TableCell => {
+                        let runs = table_cell.take().unwrap_or_default();
+                        table_row.get_or_insert_default().push(TableCell {
+                            runs: if runs.is_empty() {
+                                TableCell::new("").runs
+                            } else {
+                                runs
+                            },
+                            images: Vec::new(),
+                            col_span: 1,
+                            row_span: 1,
+                        });
+                    }
+                    TagEnd::TableHead | TagEnd::TableRow => {
+                        table_rows.push(table_row.take().unwrap_or_default());
+                    }
+                    TagEnd::Table => {
+                        for row in &mut table_rows {
+                            row.resize_with(table_columns, || TableCell::new(""));
+                        }
+                        let page_size = PageSize::a4();
+                        let margins = PageMargins::standard();
+                        let mut table = DocumentTable::new(
+                            tables.len() + 1,
+                            table_rows.len(),
+                            table_columns,
+                            page_size.width_points
+                                - margins.left_points
+                                - margins.right_points,
+                        );
+                        table.rows = std::mem::take(&mut table_rows);
+                        tables.push(table);
+                        append_plain(&mut runs, "\n\n", CharacterStyle::default());
+                    }
                     _ => {}
                 }
                 stack.pop();
@@ -76,15 +135,17 @@ pub(super) fn markdown_to_runs(source: &str) -> Vec<TextRun> {
             }
             Event::Text(text) => {
                 if !pending_prefix.is_empty() {
+                    let target = table_cell.as_mut().unwrap_or(&mut runs);
                     append_plain(
-                        &mut runs,
+                        target,
                         &pending_prefix,
                         *stack.last().unwrap_or(&CharacterStyle::default()),
                     );
                     pending_prefix.clear();
                 }
+                let target = table_cell.as_mut().unwrap_or(&mut runs);
                 append_plain(
-                    &mut runs,
+                    target,
                     &text,
                     *stack.last().unwrap_or(&CharacterStyle::default()),
                 );
@@ -93,11 +154,11 @@ pub(super) fn markdown_to_runs(source: &str) -> Vec<TextRun> {
                 let mut style = *stack.last().unwrap_or(&CharacterStyle::default());
                 style.font_choice = FontChoice::Monospace;
                 style.highlight_color = egui::Color32::from_rgb(243, 243, 243);
-                append_plain(&mut runs, &text, style);
+                append_plain(table_cell.as_mut().unwrap_or(&mut runs), &text, style);
             }
             Event::SoftBreak | Event::HardBreak => {
                 append_plain(
-                    &mut runs,
+                    table_cell.as_mut().unwrap_or(&mut runs),
                     "\n",
                     *stack.last().unwrap_or(&CharacterStyle::default()),
                 );
@@ -123,7 +184,21 @@ pub(super) fn markdown_to_runs(source: &str) -> Vec<TextRun> {
         });
     }
 
-    runs
+    let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+    let mut tables = tables.into_iter();
+    let paragraph_tables = text
+        .split('\n')
+        .map(|paragraph| {
+            (paragraph == placeholder)
+                .then(|| tables.next())
+                .flatten()
+        })
+        .collect();
+
+    MarkdownImport {
+        runs,
+        paragraph_tables,
+    }
 }
 
 fn append_plain(runs: &mut Vec<TextRun>, text: &str, style: CharacterStyle) {

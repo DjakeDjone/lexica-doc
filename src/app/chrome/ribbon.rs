@@ -10,6 +10,7 @@ use crate::app::{
     palette::{ThemeMode, ThemePalette},
     CanvasState, ChangeHistory,
 };
+use crate::canvas::scrollbar_color;
 use crate::document::DocumentState;
 use crate::grammar::{GrammarConfig, GrammarStatus};
 
@@ -56,11 +57,24 @@ pub(crate) fn paint_ribbon(
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
+            let content_style = ui.style().clone();
+            let color = scrollbar_color(*theme_mode);
+            let visuals = ui.visuals_mut();
+            visuals.extreme_bg_color = color;
+            visuals.widgets.inactive.fg_stroke.color = color;
+            visuals.widgets.hovered.fg_stroke.color = color;
+            visuals.widgets.active.fg_stroke.color = color;
+            ui.spacing_mut().scroll.active_background_opacity = 0.25;
+            ui.spacing_mut().scroll.interact_background_opacity = 0.25;
+            ui.spacing_mut().scroll.active_handle_opacity = 0.8;
+            ui.spacing_mut().scroll.interact_handle_opacity = 0.8;
+
             egui::ScrollArea::horizontal()
                 .id_salt("ribbon_horizontal_scroll")
                 .max_height(RIBBON_HEIGHT)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    ui.set_style(content_style.clone());
                     ui.set_min_height(RIBBON_HEIGHT);
                     ui.horizontal(|ui| {
                         match active_tab {
@@ -202,6 +216,7 @@ pub(crate) fn paint_ribbon(
                         }
                     });
                 });
+            ui.set_style(content_style);
         });
     output
 }

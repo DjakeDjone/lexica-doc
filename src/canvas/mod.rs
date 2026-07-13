@@ -54,6 +54,10 @@ pub(crate) use layout::cached_layout_document;
 #[cfg(test)]
 pub(crate) use layout::layout_document;
 
+pub(crate) fn scrollbar_color(theme_mode: ThemeMode) -> Color32 {
+    canvas_palette(theme_mode).page_border
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CanvasOutput {
     pub text_changed: bool,
@@ -147,7 +151,8 @@ fn paint_document_canvas_frame(
     let mut output = CanvasOutput::default();
     let palette = canvas_palette(theme_mode);
     let painter = ui.painter_at(viewport);
-    let scrollbar_pointer_captured = handle_scrollbar_input(ui, viewport, canvas);
+    let (scrollbar_pointer_captured, scrollbar_opacity) =
+        handle_scrollbar_input(ui, viewport, canvas);
 
     painter.rect_filled(viewport, CornerRadius::ZERO, palette.canvas_bg);
 
@@ -195,6 +200,7 @@ fn paint_document_canvas_frame(
                 &dl2.galley,
                 &dl2.manual_page_break_rows,
                 &dl2.paragraph_start_rows,
+                &dl2.tables,
             );
             (dl2, pl)
         } else {
@@ -205,6 +211,7 @@ fn paint_document_canvas_frame(
                 &dl.galley,
                 &dl.manual_page_break_rows,
                 &dl.paragraph_start_rows,
+                &dl.tables,
             );
             (dl, pl)
         }
@@ -217,6 +224,7 @@ fn paint_document_canvas_frame(
             &dl.galley,
             &dl.manual_page_break_rows,
             &dl.paragraph_start_rows,
+            &dl.tables,
         );
         (dl, pl)
     };
@@ -380,7 +388,7 @@ fn paint_document_canvas_frame(
                 continue;
             };
             let table_y = row.pos.y;
-            if table_y < page.start_y || table_y > page.end_y {
+            if table_y + table_layout.height < page.start_y || table_y > page.end_y {
                 continue;
             }
 
@@ -393,7 +401,7 @@ fn paint_document_canvas_frame(
             let geometry = paint_table(
                 ui,
                 canvas,
-                &page_clipped_painter,
+                &painter.with_clip_rect(visible_content_rect),
                 &table_layout.table,
                 TablePaintParams {
                     origin: table_origin,
@@ -402,9 +410,24 @@ fn paint_document_canvas_frame(
                     time: ui.input(|i| i.time),
                 },
             );
-            new_table_cell_rects.extend(geometry.cell_rects);
-            new_table_cell_content_rects.extend(geometry.cell_content_rects);
-            new_table_resize_handles.extend(geometry.resize_handles);
+            new_table_cell_rects.extend(
+                geometry
+                    .cell_rects
+                    .into_iter()
+                    .filter(|(_, _, _, rect)| rect.intersects(visible_content_rect)),
+            );
+            new_table_cell_content_rects.extend(
+                geometry
+                    .cell_content_rects
+                    .into_iter()
+                    .filter(|(_, _, _, rect)| rect.intersects(visible_content_rect)),
+            );
+            new_table_resize_handles.extend(
+                geometry
+                    .resize_handles
+                    .into_iter()
+                    .filter(|handle| handle.rect.intersects(visible_content_rect)),
+            );
         }
 
         // List markers
@@ -480,7 +503,13 @@ fn paint_document_canvas_frame(
         }
     }
 
-    paint_scrollbar(&painter, viewport, canvas, palette.page_border);
+    paint_scrollbar(
+        &painter,
+        viewport,
+        canvas,
+        palette.page_border,
+        scrollbar_opacity,
+    );
 
     if paint_active_header_footer_editor(
         ui,
@@ -620,9 +649,13 @@ fn scrollbar_rects(viewport: Rect, canvas: &CanvasState) -> Option<(Rect, Rect, 
     Some((track, thumb, travel))
 }
 
-fn handle_scrollbar_input(ui: &mut egui::Ui, viewport: Rect, canvas: &mut CanvasState) -> bool {
+fn handle_scrollbar_input(
+    ui: &mut egui::Ui,
+    viewport: Rect,
+    canvas: &mut CanvasState,
+) -> (bool, f32) {
     let Some((track, thumb, travel)) = scrollbar_rects(viewport, canvas) else {
-        return false;
+        return (false, 0.0);
     };
     let response = ui.interact(
         track.expand(2.0),
@@ -657,15 +690,37 @@ fn handle_scrollbar_input(ui: &mut egui::Ui, viewport: Rect, canvas: &mut Canvas
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
-    response.hovered() || response.dragged()
+    let active = response.hovered()
+        || response.dragged()
+        || canvas.scroll_velocity != egui::Vec2::ZERO
+        || ui.input(|input| input.smooth_scroll_delta() != egui::Vec2::ZERO);
+    let opacity = ui
+        .ctx()
+        .animate_bool(Id::new("document_scrollbar_visible"), active);
+
+    (response.hovered() || response.dragged(), opacity)
 }
 
-fn paint_scrollbar(painter: &egui::Painter, viewport: Rect, canvas: &CanvasState, color: Color32) {
+fn paint_scrollbar(
+    painter: &egui::Painter,
+    viewport: Rect,
+    canvas: &CanvasState,
+    color: Color32,
+    opacity: f32,
+) {
     let Some((track, thumb, _)) = scrollbar_rects(viewport, canvas) else {
         return;
     };
-    painter.rect_filled(track, CornerRadius::same(5), color.gamma_multiply(0.25));
-    painter.rect_filled(thumb, CornerRadius::same(5), color.gamma_multiply(0.8));
+    painter.rect_filled(
+        track,
+        CornerRadius::same(5),
+        color.gamma_multiply(0.25 * opacity),
+    );
+    painter.rect_filled(
+        thumb,
+        CornerRadius::same(5),
+        color.gamma_multiply(0.8 * opacity),
+    );
 }
 
 fn update_canvas_hover_cursor(

@@ -6,6 +6,8 @@ use crate::{
     layout::{centered_page_rect, document_points_to_screen_points, section_page_content_rect},
 };
 
+use super::layout::TableLayout;
+
 pub(crate) struct PageSlice {
     pub(super) page_rect: Rect,
     pub(super) content_rect: Rect,
@@ -43,6 +45,21 @@ impl PageLayout {
         })
     }
 
+    pub(super) fn clamped_document_pos(&self, pointer_pos: egui::Pos2) -> Option<egui::Vec2> {
+        self.pages.iter().find_map(|page| {
+            page.page_rect.contains(pointer_pos).then(|| {
+                egui::vec2(
+                    (pointer_pos.x - page.content_rect.left())
+                        .clamp(0.0, page.content_rect.width()),
+                    (page.start_y
+                        + (pointer_pos.y - page.content_rect.top())
+                            .clamp(0.0, page.content_rect.height()))
+                    .clamp(page.start_y, page.end_y),
+                )
+            })
+        })
+    }
+
     pub(super) fn caret_rect(
         &self,
         galley: &egui::Galley,
@@ -70,6 +87,7 @@ pub(super) fn layout_page_stack(
     galley: &egui::Galley,
     manual_page_break_rows: &[usize],
     paragraph_start_rows: &[usize],
+    tables: &[TableLayout],
 ) -> PageLayout {
     let page_gap = document_points_to_screen_points(24.0, canvas.zoom);
     let page_setup = document.default_page_setup();
@@ -82,7 +100,7 @@ pub(super) fn layout_page_stack(
     let page_size = base_page_rect.size();
     let content_height =
         section_page_content_rect(base_page_rect, page_setup, 14.0, 14.0, canvas.zoom).height();
-    let page_ranges = compute_page_ranges(galley, content_height, manual_page_break_rows);
+    let page_ranges = compute_page_ranges(galley, content_height, manual_page_break_rows, tables);
     let page_count = page_ranges.len().max(1);
     let stack_height =
         page_count as f32 * page_size.y + (page_count.saturating_sub(1) as f32 * page_gap);
@@ -238,6 +256,7 @@ fn compute_page_ranges(
     galley: &egui::Galley,
     page_height: f32,
     manual_page_break_rows: &[usize],
+    tables: &[TableLayout],
 ) -> Vec<(f32, f32)> {
     if galley.rows.is_empty() {
         return vec![(0.0, page_height)];
@@ -266,9 +285,36 @@ fn compute_page_ranges(
             break_rows.next();
         }
 
-        if row_end - page_start > page_height && row_start > page_start {
-            pages.push((page_start, last_row_end.max(page_start)));
-            page_start = row_start;
+        if let Some(table) = tables.iter().find(|table| table.row_index == row_index) {
+            let mut table_row_start = row_start;
+            for height in &table.row_heights {
+                let table_row_end = table_row_start + height;
+                if table_row_end - page_start > page_height {
+                    if table_row_start > page_start {
+                        pages.push((page_start, table_row_start));
+                        page_start = table_row_start;
+                    }
+                    while table_row_end - page_start > page_height {
+                        pages.push((page_start, page_start + page_height));
+                        page_start += page_height;
+                    }
+                }
+                last_row_end = table_row_end;
+                table_row_start = table_row_end;
+            }
+            last_row_end = last_row_end.max(row_end);
+            continue;
+        }
+
+        if row_end - page_start > page_height {
+            if row_start > page_start {
+                pages.push((page_start, last_row_end.max(page_start)));
+                page_start = row_start;
+            }
+            while row_end - page_start > page_height {
+                pages.push((page_start, page_start + page_height));
+                page_start += page_height;
+            }
         }
 
         last_row_end = row_end;
@@ -276,4 +322,62 @@ fn compute_page_ranges(
 
     pages.push((page_start, last_row_end.max(page_start)));
     pages
+}
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::{compute_page_ranges, PageLayout, PageSlice};
+    use crate::{canvas::layout::TableLayout, document::DocumentTable};
+
+    #[test]
+    fn drag_selection_reaches_line_ends_from_the_page_margin() {
+        let layout = PageLayout {
+            pages: vec![PageSlice {
+                page_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 200.0)),
+                content_rect: egui::Rect::from_min_max(
+                    egui::pos2(20.0, 20.0),
+                    egui::pos2(180.0, 180.0),
+                ),
+                section_id: 1,
+                page_index_within_section: 0,
+                section_page_count: 1,
+                start_y: 100.0,
+                end_y: 150.0,
+            }],
+        };
+
+        assert_eq!(
+            layout.clamped_document_pos(egui::pos2(195.0, 190.0)),
+            Some(egui::vec2(160.0, 150.0))
+        );
+    }
+
+    #[test]
+    fn table_rows_move_intact_to_following_pages() {
+        let mut job = egui::epaint::text::LayoutJob::simple_singleline(
+            "x".to_owned(),
+            egui::FontId::default(),
+            egui::Color32::BLACK,
+        );
+        job.wrap.max_width = 100.0;
+        let ctx = egui::Context::default();
+        let mut galley = None;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            galley = Some(ui.painter().layout_job(job.clone()));
+        });
+        let mut galley = galley.unwrap();
+        let row = std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut galley).rows[0].row);
+        row.size.y = 120.0;
+        let table = TableLayout {
+            row_index: 0,
+            height: 120.0,
+            row_heights: vec![40.0, 40.0, 40.0],
+            table: DocumentTable::new(1, 3, 1, 100.0),
+        };
+
+        assert_eq!(
+            compute_page_ranges(&galley, 100.0, &[], &[table]),
+            vec![(0.0, 80.0), (80.0, 120.0)]
+        );
+    }
 }

@@ -78,7 +78,12 @@ pub(super) fn handle_pointer_interaction(
     }
 
     if let Some(pointer_pos) = response.interact_pointer_pos() {
-        let Some(local_pos) = page_layout.document_pos(pointer_pos) else {
+        let Some(local_pos) = page_layout.document_pos(pointer_pos).or_else(|| {
+            response
+                .dragged()
+                .then(|| page_layout.clamped_document_pos(pointer_pos))
+                .flatten()
+        }) else {
             return;
         };
         let mut cursor = galley.cursor_from_pos(local_pos);

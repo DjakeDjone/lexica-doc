@@ -776,26 +776,16 @@ impl App for WorsApp {
             }
         }
 
-        // Auto-switch to contextual tabs when an object is selected.
-        match (
-            self.canvas.active_header_footer,
-            self.canvas.selected_image_id,
-            self.canvas.active_table_cell,
-            self.active_tab,
-        ) {
-            (Some(_), _, _, tab) if tab != RibbonTab::HeaderFooter => {
-                self.active_tab = RibbonTab::HeaderFooter;
-            }
-            (None, Some(_), _, tab) if tab != RibbonTab::Picture => {
-                self.active_tab = RibbonTab::Picture;
-            }
-            (None, None, Some(_), tab) if tab != RibbonTab::Table => {
-                self.active_tab = RibbonTab::Table;
-            }
-            (None, None, None, RibbonTab::HeaderFooter | RibbonTab::Picture | RibbonTab::Table) => {
-                self.active_tab = RibbonTab::Home;
-            }
-            _ => {}
+        // Leave a contextual tab when its object is no longer selected.
+        if self.canvas.active_header_footer.is_none()
+            && self.canvas.selected_image_id.is_none()
+            && self.canvas.active_table_cell.is_none()
+            && matches!(
+                self.active_tab,
+                RibbonTab::HeaderFooter | RibbonTab::Picture | RibbonTab::Table
+            )
+        {
+            self.active_tab = RibbonTab::Home;
         }
 
         egui::Panel::bottom("status")

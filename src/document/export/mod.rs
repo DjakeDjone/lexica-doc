@@ -12,7 +12,7 @@ use eframe::egui::Color32;
 
 use super::{
     docx::{document_to_docx, docx_to_document},
-    markdown::markdown_to_runs,
+    markdown::import_markdown,
     odt::{document_to_odt, odt_to_document},
     CharacterStyle, DocumentImage, DocumentState, FontChoice, ImageLayoutMode, LineSpacing,
     LineSpacingKind, ParagraphAlignment, TextRun, VerticalAlign,
@@ -98,7 +98,12 @@ impl DocumentState {
             "md" | "markdown" => {
                 let source = fs::read_to_string(path)
                     .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-                markdown_to_runs(&source)
+                let imported = import_markdown(&source);
+                let mut document = Self::bootstrap();
+                document.replace_with_runs(title, imported.runs);
+                document.paragraph_tables = imported.paragraph_tables;
+                document.ensure_paragraph_style_count();
+                return Ok(document);
             }
             _ => {
                 let source = fs::read_to_string(path)

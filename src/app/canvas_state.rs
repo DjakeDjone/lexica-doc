@@ -48,6 +48,7 @@ pub struct TableResizeHandleRect {
     pub table_id: usize,
     pub kind: TableResizeKind,
     pub rect: egui::Rect,
+    pub start_points: f32,
 }
 
 pub struct TableResizeDrag {

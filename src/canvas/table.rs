@@ -198,22 +198,24 @@ pub(super) fn paint_table(
         StrokeKind::Outside,
     );
 
-    for col in 0..col_widths.len().saturating_sub(1) {
+    for col in 0..col_widths.len() {
         let x = col_x[col + 1];
         geometry.resize_handles.push(TableResizeHandleRect {
             table_id: table.id,
             kind: TableResizeKind::Column { left_col: col },
+            start_points: table.col_widths_points[col],
             rect: Rect::from_center_size(
                 egui::pos2(x, table_rect.center().y),
                 egui::vec2(8.0, table_rect.height()),
             ),
         });
     }
-    for row in 0..actual_row_heights.len().saturating_sub(1) {
+    for row in 0..actual_row_heights.len() {
         let y = row_y[row + 1];
         geometry.resize_handles.push(TableResizeHandleRect {
             table_id: table.id,
             kind: TableResizeKind::Row { top_row: row },
+            start_points: actual_row_heights[row] / zoom.max(0.01),
             rect: Rect::from_center_size(
                 egui::pos2(table_rect.center().x, y),
                 egui::vec2(table_rect.width(), 8.0),
@@ -457,6 +459,52 @@ pub(super) fn handle_table_interaction(
         canvas.table_resize_drag = None;
     }
 
+    let Some(pointer_pos) = response.interact_pointer_pos() else {
+        return (false, document_changed);
+    };
+
+    if response.drag_started() {
+        let start_ptr = pointer_pos - response.total_drag_delta().unwrap_or_default();
+        if let Some(handle) = table_resize_handle_hit(canvas, start_ptr) {
+            if let Some(table) = document.table_by_id(handle.table_id) {
+                let dimensions = match handle.kind {
+                    TableResizeKind::Column { left_col } => {
+                        if left_col >= table.col_widths_points.len() {
+                            None
+                        } else if left_col + 1 == table.col_widths_points.len() {
+                            Some((table.col_widths_points[left_col], 0.0))
+                        } else {
+                            Some((
+                                table.col_widths_points[left_col],
+                                table.col_widths_points[left_col + 1],
+                            ))
+                        }
+                    }
+                    TableResizeKind::Row { top_row } => {
+                        if top_row >= table.row_heights_points.len() {
+                            None
+                        } else {
+                            Some((handle.start_points, 0.0))
+                        }
+                    }
+                };
+                if let Some((first_points, second_points)) = dimensions {
+                    history.checkpoint(document, ui.input(|i| i.time));
+                    canvas.table_resize_drag = Some(TableResizeDrag {
+                        table_id: handle.table_id,
+                        kind: handle.kind,
+                        start_ptr,
+                        first_points,
+                        second_points,
+                    });
+                    canvas.active_table_cell = None;
+                    canvas.selected_image_id = None;
+                    return (true, document_changed);
+                }
+            }
+        }
+    }
+
     if response.dragged() {
         if let Some(drag) = canvas.table_resize_drag.as_ref() {
             if let Some(pointer_pos) = response.interact_pointer_pos() {
@@ -464,18 +512,34 @@ pub(super) fn handle_table_interaction(
                 match drag.kind {
                     TableResizeKind::Column { left_col } => {
                         let delta = (pointer_pos.x - drag.start_ptr.x) / zoom;
-                        let total = drag.first_points + drag.second_points;
-                        let first = (drag.first_points + delta)
-                            .clamp(MIN_SIZE_POINTS, total - MIN_SIZE_POINTS);
-                        let second = total - first;
-                        document.resize_table_column_pair(drag.table_id, left_col, first, second);
+                        if drag.second_points == 0.0 {
+                            if let Some(width) = document
+                                .table_by_id_mut(drag.table_id)
+                                .and_then(|table| table.col_widths_points.get_mut(left_col))
+                            {
+                                *width = (drag.first_points + delta).max(MIN_SIZE_POINTS);
+                            }
+                        } else {
+                            let total = drag.first_points + drag.second_points;
+                            let first = (drag.first_points + delta)
+                                .clamp(MIN_SIZE_POINTS, total - MIN_SIZE_POINTS);
+                            let second = total - first;
+                            document.resize_table_column_pair(
+                                drag.table_id,
+                                left_col,
+                                first,
+                                second,
+                            );
+                        }
                     }
                     TableResizeKind::Row { top_row } => {
                         let delta = (pointer_pos.y - drag.start_ptr.y) / zoom;
-                        let total = drag.first_points + drag.second_points;
-                        let first = (drag.first_points + delta).clamp(12.0, total - 12.0);
-                        let second = total - first;
-                        document.resize_table_row_pair(drag.table_id, top_row, first, second);
+                        if let Some(height) = document
+                            .table_by_id_mut(drag.table_id)
+                            .and_then(|table| table.row_heights_points.get_mut(top_row))
+                        {
+                            *height = (drag.first_points + delta).max(12.0);
+                        }
                     }
                 }
                 document_changed = true;
@@ -496,51 +560,7 @@ pub(super) fn handle_table_interaction(
         }
     }
 
-    let Some(pointer_pos) = response.interact_pointer_pos() else {
-        return (false, document_changed);
-    };
-
     if response.drag_started() {
-        if let Some(handle) = table_resize_handle_hit(canvas, pointer_pos) {
-            if let Some(table) = document.table_by_id(handle.table_id) {
-                let dimensions = match handle.kind {
-                    TableResizeKind::Column { left_col } => {
-                        if left_col + 1 >= table.col_widths_points.len() {
-                            None
-                        } else {
-                            Some((
-                                table.col_widths_points[left_col],
-                                table.col_widths_points[left_col + 1],
-                            ))
-                        }
-                    }
-                    TableResizeKind::Row { top_row } => {
-                        if top_row + 1 >= table.row_heights_points.len() {
-                            None
-                        } else {
-                            Some((
-                                table.row_heights_points[top_row],
-                                table.row_heights_points[top_row + 1],
-                            ))
-                        }
-                    }
-                };
-                if let Some((first_points, second_points)) = dimensions {
-                    history.checkpoint(document, ui.input(|i| i.time));
-                    canvas.table_resize_drag = Some(TableResizeDrag {
-                        table_id: handle.table_id,
-                        kind: handle.kind,
-                        start_ptr: pointer_pos,
-                        first_points,
-                        second_points,
-                    });
-                    canvas.active_table_cell = None;
-                    canvas.selected_image_id = None;
-                    return (true, document_changed);
-                }
-            }
-        }
-
         if let Some(cell) = table_cell_hit(canvas, pointer_pos) {
             response.request_focus();
             canvas.active_table_cell = Some(cell);
@@ -595,4 +615,135 @@ pub(super) fn handle_table_interaction(
     }
 
     (false, document_changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outer_edges_resize_the_table_width_and_height() {
+        let ctx = egui::Context::default();
+        let mut document = DocumentState::bootstrap();
+        document.insert_table(0, 2, 2);
+        let table_id = document
+            .paragraph_tables
+            .iter()
+            .flatten()
+            .next()
+            .unwrap()
+            .id;
+        document
+            .table_by_id_mut(table_id)
+            .unwrap()
+            .row_heights_points = vec![40.0, 40.0];
+        let table = document.table_by_id(table_id).unwrap().clone();
+        let original_width = table.total_width_points();
+        let original_height = table.total_height_points();
+        let table_origin = egui::pos2(20.0, 20.0);
+        let horizontal_handle = egui::pos2(table_origin.x + original_width, table_origin.y + 10.0);
+        let vertical_handle = egui::pos2(table_origin.x + 10.0, table_origin.y + original_height);
+        let mut canvas = CanvasState::default();
+        canvas.active_table_cell = Some((table_id, 0, 0));
+        let mut history = ChangeHistory::new();
+        let canvas_rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 300.0));
+
+        for (time, events) in [
+            (-0.1, vec![]),
+            (
+                0.0,
+                vec![
+                    egui::Event::PointerMoved(horizontal_handle),
+                    egui::Event::PointerButton {
+                        pos: horizontal_handle,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            ),
+            (
+                0.1,
+                vec![egui::Event::PointerMoved(
+                    horizontal_handle + egui::vec2(12.0, 0.0),
+                )],
+            ),
+            (
+                0.2,
+                vec![egui::Event::PointerMoved(
+                    horizontal_handle + egui::vec2(20.0, 0.0),
+                )],
+            ),
+            (
+                0.3,
+                vec![egui::Event::PointerButton {
+                    pos: horizontal_handle + egui::vec2(20.0, 0.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            ),
+            (
+                0.4,
+                vec![
+                    egui::Event::PointerMoved(vertical_handle),
+                    egui::Event::PointerButton {
+                        pos: vertical_handle,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            ),
+            (
+                0.5,
+                vec![egui::Event::PointerMoved(
+                    vertical_handle + egui::vec2(0.0, 12.0),
+                )],
+            ),
+            (
+                0.6,
+                vec![egui::Event::PointerMoved(
+                    vertical_handle + egui::vec2(0.0, 20.0),
+                )],
+            ),
+        ] {
+            let input = egui::RawInput {
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let painter = ui.painter().clone();
+                let geometry = paint_table(
+                    ui,
+                    &mut canvas,
+                    &painter,
+                    &table,
+                    TablePaintParams {
+                        origin: table_origin,
+                        zoom: 1.0,
+                        active_cell: None,
+                        time,
+                    },
+                );
+                canvas.table_resize_handles = geometry.resize_handles;
+                let response = ui.interact(
+                    canvas_rect,
+                    egui::Id::new("table_resize_test"),
+                    egui::Sense::click_and_drag(),
+                );
+                handle_table_interaction(ui, &response, &mut canvas, &mut document, &mut history);
+            });
+        }
+
+        assert!(document.table_by_id(table_id).unwrap().total_width_points() > original_width);
+        assert!(
+            document
+                .table_by_id(table_id)
+                .unwrap()
+                .total_height_points()
+                > original_height
+        );
+    }
 }
