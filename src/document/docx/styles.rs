@@ -104,6 +104,9 @@ impl CharacterStylePatch {
 pub(crate) struct ParagraphStylePatch {
     pub(crate) alignment: Option<ParagraphAlignment>,
     pub(crate) page_break_before: Option<bool>,
+    pub(crate) left_indent_points: Option<f32>,
+    pub(crate) right_indent_points: Option<f32>,
+    pub(crate) first_line_indent_points: Option<f32>,
     pub(crate) spacing_before_points: Option<u16>,
     pub(crate) spacing_after_points: Option<u16>,
     pub(crate) line_spacing: Option<LineSpacing>,
@@ -116,6 +119,15 @@ impl ParagraphStylePatch {
         }
         if let Some(value) = self.page_break_before {
             style.page_break_before = value;
+        }
+        if let Some(value) = self.left_indent_points {
+            style.left_indent_points = value;
+        }
+        if let Some(value) = self.right_indent_points {
+            style.right_indent_points = value;
+        }
+        if let Some(value) = self.first_line_indent_points {
+            style.first_line_indent_points = value;
         }
         if let Some(value) = self.spacing_before_points {
             style.spacing_before_points = value;
@@ -135,6 +147,15 @@ impl ParagraphStylePatch {
         }
         if other.page_break_before.is_some() {
             self.page_break_before = other.page_break_before;
+        }
+        if other.left_indent_points.is_some() {
+            self.left_indent_points = other.left_indent_points;
+        }
+        if other.right_indent_points.is_some() {
+            self.right_indent_points = other.right_indent_points;
+        }
+        if other.first_line_indent_points.is_some() {
+            self.first_line_indent_points = other.first_line_indent_points;
         }
         if other.spacing_before_points.is_some() {
             self.spacing_before_points = other.spacing_before_points;
@@ -621,6 +642,18 @@ pub(crate) fn apply_paragraph_style_patch_event(
             ));
         }
         b"spacing" => apply_spacing_patch(event, patch),
+        b"ind" => {
+            let (left, right, first_line) = super::parsed_indents(event);
+            if left.is_some() {
+                patch.left_indent_points = left;
+            }
+            if right.is_some() {
+                patch.right_indent_points = right;
+            }
+            if first_line.is_some() {
+                patch.first_line_indent_points = first_line;
+            }
+        }
         b"pageBreakBefore" => patch.page_break_before = Some(docx_flag(event, true)),
         _ => {}
     }

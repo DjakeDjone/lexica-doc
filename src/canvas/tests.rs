@@ -63,6 +63,38 @@ fn unchanged_document_layout_is_reused() {
     assert!(!Arc::ptr_eq(&layouts[2], &layouts[3]));
 }
 
+#[test]
+fn first_line_and_hanging_indents_move_only_the_first_wrapped_row() {
+    let mut document = make_document(
+        vec![TextRun {
+            text: "one two three four five six seven eight nine ten eleven twelve".to_owned(),
+            style: CharacterStyle::default(),
+        }],
+        vec![ParagraphStyle {
+            left_indent_points: 24.0,
+            right_indent_points: 24.0,
+            first_line_indent_points: 18.0,
+            ..ParagraphStyle::default()
+        }],
+        vec![None],
+    );
+    let canvas = CanvasState::default();
+
+    let first_line = run_headless_layout(&document, &canvas, 180.0);
+    assert!(first_line.galley.rows.len() > 1);
+    assert!(
+        first_line.galley.rows[0].rect_without_leading_space().min.x
+            > first_line.galley.rows[1].rect_without_leading_space().min.x
+    );
+
+    document.paragraph_styles[0].first_line_indent_points = -18.0;
+    let hanging = run_headless_layout(&document, &canvas, 180.0);
+    assert!(
+        hanging.galley.rows[0].rect_without_leading_space().min.x
+            < hanging.galley.rows[1].rect_without_leading_space().min.x
+    );
+}
+
 fn make_document(
     runs: Vec<TextRun>,
     paragraph_styles: Vec<ParagraphStyle>,

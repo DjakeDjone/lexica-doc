@@ -380,6 +380,30 @@ fn write_paragraph_properties(
             r#"<w:numPr><w:ilvl w:val="0"/><w:numId w:val="{num_id}"/></w:numPr>"#
         );
     }
+    if style.left_indent_points != 0.0
+        || style.right_indent_points != 0.0
+        || style.first_line_indent_points != 0.0
+    {
+        let special = if style.first_line_indent_points < 0.0 {
+            format!(
+                r#" w:hanging="{}""#,
+                points_to_twips(-style.first_line_indent_points)
+            )
+        } else if style.first_line_indent_points > 0.0 {
+            format!(
+                r#" w:firstLine="{}""#,
+                points_to_twips(style.first_line_indent_points)
+            )
+        } else {
+            String::new()
+        };
+        let _ = write!(
+            xml,
+            r#"<w:ind w:left="{}" w:right="{}"{special}/>"#,
+            points_to_twips(style.left_indent_points),
+            points_to_twips(style.right_indent_points),
+        );
+    }
     if style.spacing_before_points > 0
         || style.spacing_after_points > 0
         || style.line_spacing != LineSpacing::default()

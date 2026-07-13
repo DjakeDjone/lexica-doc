@@ -108,6 +108,39 @@ pub(crate) fn apply_spacing(event: &BytesStart<'_>, paragraph_style: &mut Paragr
     }
 }
 
+pub(crate) fn parsed_indents(
+    event: &BytesStart<'_>,
+) -> (Option<f32>, Option<f32>, Option<f32>) {
+    let points = |key: &[u8]| {
+        attr_value(event, key)
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+            .map(twips_to_points)
+    };
+    let first_line = points(b"hanging")
+        .map(|value| -value.abs())
+        .or_else(|| points(b"firstLine"));
+
+    (
+        points(b"start").or_else(|| points(b"left")),
+        points(b"end").or_else(|| points(b"right")),
+        first_line,
+    )
+}
+
+pub(crate) fn apply_indents(event: &BytesStart<'_>, paragraph_style: &mut ParagraphStyle) {
+    let (left, right, first_line) = parsed_indents(event);
+    if let Some(value) = left {
+        paragraph_style.left_indent_points = value;
+    }
+    if let Some(value) = right {
+        paragraph_style.right_indent_points = value;
+    }
+    if let Some(value) = first_line {
+        paragraph_style.first_line_indent_points = value;
+    }
+}
+
 pub(crate) fn parse_line_spacing(event: &BytesStart<'_>) -> Option<LineSpacing> {
     let line = attr_value(event, b"line")?.parse::<f32>().ok()?;
     let line_rule = attr_value(event, b"lineRule").unwrap_or_else(|| "auto".to_owned());

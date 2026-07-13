@@ -436,6 +436,7 @@ pub(crate) fn parse_document_xml(
                     );
                 }
                 b"spacing" => apply_spacing(&event, &mut paragraph_style),
+                b"ind" => apply_indents(&event, &mut paragraph_style),
                 b"pageBreakBefore" => paragraph_style.page_break_before = docx_flag(&event, true),
                 b"numId" => current_num_id = attr_value(&event, b"val"),
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),
@@ -581,6 +582,7 @@ pub(crate) fn parse_document_xml(
                     );
                 }
                 b"spacing" => apply_spacing(&event, &mut paragraph_style),
+                b"ind" => apply_indents(&event, &mut paragraph_style),
                 b"pageBreakBefore" => paragraph_style.page_break_before = docx_flag(&event, true),
                 b"numId" => current_num_id = attr_value(&event, b"val"),
                 b"ilvl" => current_ilvl = attr_value(&event, b"val"),

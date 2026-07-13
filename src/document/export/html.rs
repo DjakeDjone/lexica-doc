@@ -67,8 +67,11 @@ body {{ margin: 0; padding: 18pt; background: #e7ebf0; }}\
 
             let _ = write!(
                 html,
-                "<p class=\"paragraph\" style=\"text-align:{};margin-top:{}pt;margin-bottom:{}pt;{}\">",
+                "<p class=\"paragraph\" style=\"text-align:{};margin-left:{}pt;margin-right:{}pt;text-indent:{}pt;margin-top:{}pt;margin-bottom:{}pt;{}\">",
                 paragraph_alignment_css(paragraph.style.alignment),
+                paragraph.style.left_indent_points,
+                paragraph.style.right_indent_points,
+                paragraph.style.first_line_indent_points,
                 paragraph.style.spacing_before_points,
                 paragraph.style.spacing_after_points,
                 line_spacing_css(paragraph.style.line_spacing)

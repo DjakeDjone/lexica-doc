@@ -14,9 +14,10 @@ pub use file::open_document_from_path;
 pub use file::{open_document, save_document, save_document_as, save_document_as_with_name};
 
 pub use format::{
-    set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment, set_text_color,
-    sync_active_style, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
-    toggle_strikethrough, toggle_subscript, toggle_superscript, toggle_underline,
+    set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment,
+    set_paragraph_indents, set_text_color, sync_active_style, toggle_bold, toggle_bullet_list,
+    toggle_italic, toggle_ordered_list, toggle_strikethrough, toggle_subscript, toggle_superscript,
+    toggle_underline,
 };
 
 pub use insert::{

@@ -52,6 +52,7 @@ fn parses_lists_alignment_and_page_settings_from_docx_xml() {
             <w:p>
               <w:pPr>
                 <w:jc w:val="center"/>
+                <w:ind w:left="480" w:right="240" w:firstLine="300" w:hanging="120"/>
                 <w:numPr>
                   <w:ilvl w:val="0"/>
                   <w:numId w:val="7"/>
@@ -93,6 +94,9 @@ fn parses_lists_alignment_and_page_settings_from_docx_xml() {
             alignment: ParagraphAlignment::Center,
             list_kind: ListKind::Ordered,
             page_break_before: false,
+            left_indent_points: 24.0,
+            right_indent_points: 12.0,
+            first_line_indent_points: -6.0,
             spacing_before_points: 0,
             spacing_after_points: 0,
             line_spacing: crate::document::LineSpacing::default(),
@@ -269,12 +273,14 @@ fn resolves_word_styles_for_paragraph_spacing_and_run_formatting() {
           <w:style w:type="paragraph" w:styleId="Normal">
             <w:pPr>
               <w:spacing w:after="160"/>
+              <w:ind w:start="720" w:end="360" w:hanging="180"/>
             </w:pPr>
           </w:style>
           <w:style w:type="paragraph" w:styleId="Title">
             <w:basedOn w:val="Normal"/>
             <w:pPr>
               <w:spacing w:after="240"/>
+              <w:ind w:firstLine="240"/>
             </w:pPr>
             <w:rPr>
               <w:rFonts w:ascii="Calibri"/>
@@ -322,6 +328,10 @@ fn resolves_word_styles_for_paragraph_spacing_and_run_formatting() {
 
     assert_eq!(imported.paragraph_styles[0].spacing_after_points, 12);
     assert_eq!(imported.paragraph_styles[1].spacing_after_points, 8);
+    assert_eq!(imported.paragraph_styles[0].left_indent_points, 36.0);
+    assert_eq!(imported.paragraph_styles[0].right_indent_points, 18.0);
+    assert_eq!(imported.paragraph_styles[0].first_line_indent_points, 12.0);
+    assert_eq!(imported.paragraph_styles[1].first_line_indent_points, -9.0);
     assert_eq!(
         imported.paragraph_styles[1].line_spacing.kind,
         LineSpacingKind::AutoMultiplier
@@ -559,6 +569,9 @@ fn exports_docx_document_xml_for_formatting_tables_images_and_sections() {
     assert!(document_xml.contains(r#"<w:highlight w:val="yellow"/>"#));
     assert!(document_xml.contains(r#"<w:rFonts w:ascii="Liberation Serif""#));
     assert!(document_xml.contains(r#"<w:jc w:val="center"/>"#));
+    assert!(
+        document_xml.contains(r#"<w:ind w:left="720" w:right="360" w:firstLine="240"/>"#)
+    );
     assert!(document_xml
         .contains(r#"<w:spacing w:before="120" w:after="160" w:line="360" w:lineRule="auto"/>"#));
     assert!(document_xml.contains("<w:pageBreakBefore/>"));
@@ -724,6 +737,9 @@ fn rich_export_document() -> DocumentState {
     document.paragraph_styles = vec![
         ParagraphStyle {
             alignment: ParagraphAlignment::Center,
+            left_indent_points: 36.0,
+            right_indent_points: 18.0,
+            first_line_indent_points: 12.0,
             spacing_before_points: 6,
             spacing_after_points: 8,
             line_spacing: LineSpacing {

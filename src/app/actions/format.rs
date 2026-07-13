@@ -167,6 +167,23 @@ pub fn set_paragraph_alignment(
     });
 }
 
+pub fn set_paragraph_indents(
+    document: &mut DocumentState,
+    canvas: &mut CanvasState,
+    left: f32,
+    right: f32,
+    first_line: f32,
+    history: &mut ChangeHistory,
+    now: f64,
+) {
+    history.checkpoint_coalesced(document, now);
+    apply_selection_or_current_paragraph(document, canvas, move |style| {
+        style.left_indent_points = left;
+        style.right_indent_points = right;
+        style.first_line_indent_points = first_line;
+    });
+}
+
 pub fn toggle_bullet_list(
     document: &mut DocumentState,
     canvas: &mut CanvasState,
@@ -361,4 +378,48 @@ fn apply_selection_or_current_paragraph(
     let range = canvas.selection.as_sorted_char_range();
     document.apply_paragraph_style_to_range(range, mutate);
     canvas.active_paragraph_style = document.paragraph_style_at(canvas.selection.primary.index);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{text::CCursor, text_selection::CCursorRange};
+
+    #[test]
+    fn paragraph_indents_apply_to_selection_and_undo() {
+        let mut document = DocumentState::bootstrap();
+        document.replace_with_runs(
+            "Test".to_owned(),
+            vec![TextRun {
+                text: "one\ntwo".to_owned(),
+                style: CharacterStyle::default(),
+            }],
+        );
+        let mut canvas = CanvasState {
+            selection: CCursorRange::two(CCursor::new(0), CCursor::new(7)),
+            ..CanvasState::default()
+        };
+        let mut history = ChangeHistory::default();
+
+        set_paragraph_indents(
+            &mut document,
+            &mut canvas,
+            36.0,
+            18.0,
+            -9.0,
+            &mut history,
+            1.0,
+        );
+
+        assert!(document.paragraph_styles.iter().all(|style| {
+            style.left_indent_points == 36.0
+                && style.right_indent_points == 18.0
+                && style.first_line_indent_points == -9.0
+        }));
+        assert!(history.undo(&mut document));
+        assert_eq!(
+            document.paragraph_styles,
+            vec![ParagraphStyle::default(), ParagraphStyle::default()]
+        );
+    }
 }

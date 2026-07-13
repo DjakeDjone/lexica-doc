@@ -35,6 +35,9 @@ mod tests {
             }],
         );
         document.paragraph_styles[0].alignment = ParagraphAlignment::Center;
+        document.paragraph_styles[0].left_indent_points = 36.0;
+        document.paragraph_styles[0].right_indent_points = 18.0;
+        document.paragraph_styles[0].first_line_indent_points = -9.0;
 
         let bytes = document_to_odt(&document).expect("odt should export");
         assert!(bytes.starts_with(b"PK"));
@@ -47,6 +50,9 @@ mod tests {
             imported.paragraph_styles[0].alignment,
             ParagraphAlignment::Center
         );
+        assert_eq!(imported.paragraph_styles[0].left_indent_points, 36.0);
+        assert_eq!(imported.paragraph_styles[0].right_indent_points, 18.0);
+        assert_eq!(imported.paragraph_styles[0].first_line_indent_points, -9.0);
     }
 
     #[test]

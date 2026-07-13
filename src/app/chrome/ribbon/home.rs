@@ -4,6 +4,7 @@ use super::common::{alignment_button, format_button, ribbon_group};
 use crate::app::{
     actions::{
         set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment,
+        set_paragraph_indents,
         set_text_color, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
         toggle_strikethrough, toggle_subscript, toggle_superscript, toggle_underline,
     },
@@ -133,6 +134,121 @@ pub(crate) fn ribbon_paragraph_group(
         {
             toggle_ordered_list(document, canvas, history);
         }
+
+        ui.separator();
+        ui.menu_button("Indent ▾", |ui| {
+            let style = canvas.active_paragraph_style;
+            let mut left = style.left_indent_points;
+            let mut right = style.right_indent_points;
+
+            ui.horizontal(|ui| {
+                ui.label("Left");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut left)
+                            .range(-720.0..=720.0)
+                            .speed(1.0)
+                            .fixed_decimals(1)
+                            .suffix(" pt"),
+                    )
+                    .changed()
+                {
+                    set_paragraph_indents(
+                        document,
+                        canvas,
+                        left,
+                        right,
+                        style.first_line_indent_points,
+                        history,
+                        ui.input(|input| input.time),
+                    );
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Right");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut right)
+                            .range(-720.0..=720.0)
+                            .speed(1.0)
+                            .fixed_decimals(1)
+                            .suffix(" pt"),
+                    )
+                    .changed()
+                {
+                    set_paragraph_indents(
+                        document,
+                        canvas,
+                        left,
+                        right,
+                        style.first_line_indent_points,
+                        history,
+                        ui.input(|input| input.time),
+                    );
+                }
+            });
+
+            let mut special = if style.first_line_indent_points < 0.0 {
+                -1
+            } else if style.first_line_indent_points > 0.0 {
+                1
+            } else {
+                0
+            };
+            let previous_special = special;
+            egui::ComboBox::from_id_salt("paragraph_indent_special")
+                .selected_text(match special {
+                    -1 => "Hanging",
+                    1 => "First line",
+                    _ => "None",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut special, 0, "None");
+                    ui.selectable_value(&mut special, 1, "First line");
+                    ui.selectable_value(&mut special, -1, "Hanging");
+                });
+
+            let mut magnitude = style.first_line_indent_points.abs();
+            if special != previous_special {
+                if special != 0 && magnitude == 0.0 {
+                    magnitude = 36.0;
+                }
+                set_paragraph_indents(
+                    document,
+                    canvas,
+                    left,
+                    right,
+                    magnitude * special as f32,
+                    history,
+                    ui.input(|input| input.time),
+                );
+            }
+
+            ui.horizontal(|ui| {
+                ui.label("By");
+                if ui
+                    .add_enabled(
+                        special != 0,
+                        egui::DragValue::new(&mut magnitude)
+                            .range(0.0..=720.0)
+                            .speed(1.0)
+                            .fixed_decimals(1)
+                            .suffix(" pt"),
+                    )
+                    .changed()
+                {
+                    set_paragraph_indents(
+                        document,
+                        canvas,
+                        left,
+                        right,
+                        magnitude * special as f32,
+                        history,
+                        ui.input(|input| input.time),
+                    );
+                }
+            });
+        });
     });
 }
 

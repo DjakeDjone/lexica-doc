@@ -139,7 +139,7 @@ compatibility still needs these features:
 
 ### Paragraph Formatting
 
-- [ ] Add first-line, hanging, left, and right indents.
+- [x] Add first-line, hanging, left, and right indents.
 - [ ] Add tab stops with left, center, right, decimal, bar, and leader styles.
 - [ ] Add paragraph borders, paragraph shading, drop caps, and text boxes.
 - [ ] Add keep with next, keep lines together, widow/orphan control, suppress

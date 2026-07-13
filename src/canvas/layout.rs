@@ -170,19 +170,35 @@ pub fn layout_document(
             side_wrap_flow = None;
         }
 
-        let base_indent = if paragraph.list_marker.is_some() {
+        let list_indent = if paragraph.list_marker.is_some() {
             marker_gutter
         } else {
             0.0
         };
+        let base_indent = list_indent
+            + document_points_to_screen_points(
+                paragraph.style.left_indent_points,
+                canvas.zoom,
+            );
+        let right_indent = document_points_to_screen_points(
+            paragraph.style.right_indent_points,
+            canvas.zoom,
+        );
         let (indent, paragraph_wrap_width) = side_wrap_flow
             .as_ref()
             .filter(|flow| flow.pending_top_height <= 0.0)
             .map_or_else(
-                || (base_indent, (wrap_width - base_indent).max(1.0)),
+                || {
+                    (
+                        base_indent,
+                        (wrap_width - base_indent - right_indent).max(1.0),
+                    )
+                },
                 |flow| {
                     let start_x = flow.text_start_x.max(base_indent).clamp(0.0, wrap_width);
-                    let end_x = (flow.text_start_x + flow.text_width).clamp(start_x, wrap_width);
+                    let end_x = (flow.text_start_x + flow.text_width)
+                        .min(wrap_width - right_indent)
+                        .clamp(start_x, wrap_width);
                     (start_x, (end_x - start_x).max(1.0))
                 },
             );
@@ -271,6 +287,13 @@ pub fn layout_document(
                 }
                 current_char_index += run_len;
             }
+        }
+
+        if let Some(section) = job.sections.first_mut() {
+            section.leading_space = document_points_to_screen_points(
+                paragraph.style.first_line_indent_points,
+                canvas.zoom,
+            );
         }
 
         let marker_style = paragraph

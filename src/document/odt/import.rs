@@ -647,6 +647,15 @@ fn apply_paragraph_properties(
     if attr_value(event, b"break-before").is_some_and(|value| value == "page") {
         style.page_break_before = true;
     }
+    if let Some(value) = attr_value(event, b"margin-left").and_then(|v| parse_length_points(&v)) {
+        style.left_indent_points = value;
+    }
+    if let Some(value) = attr_value(event, b"margin-right").and_then(|v| parse_length_points(&v)) {
+        style.right_indent_points = value;
+    }
+    if let Some(value) = attr_value(event, b"text-indent").and_then(|v| parse_length_points(&v)) {
+        style.first_line_indent_points = value;
+    }
     if let Some(value) = attr_value(event, b"margin-top").and_then(|v| parse_length_points(&v)) {
         style.spacing_before_points = value.max(0.0).round() as u16;
     }

@@ -158,14 +158,20 @@ fn exports_vertical_align_to_html_pdf_and_markdown() {
             },
         ],
     );
+    document.paragraph_styles[0].left_indent_points = 36.0;
+    document.paragraph_styles[0].right_indent_points = 18.0;
+    document.paragraph_styles[0].first_line_indent_points = -9.0;
 
     let html = document.to_html();
     assert!(html.contains("vertical-align:super;font-size:65%;"));
     assert!(html.contains("vertical-align:sub;font-size:65%;"));
+    assert!(html.contains("margin-left:36pt;margin-right:18pt;text-indent:-9pt;"));
 
     let pdf_html = document.to_pdf_html();
     assert!(pdf_html.contains("vertical-align:super;font-size:65%;"));
     assert!(pdf_html.contains("vertical-align:sub;font-size:65%;"));
+    assert!(pdf_html
+        .contains("margin-left:48.00px;margin-right:24.00px;text-indent:-12.00px;"));
 
     let markdown = document.to_markdown();
     assert!(markdown.contains("<sup>super</sup>"));

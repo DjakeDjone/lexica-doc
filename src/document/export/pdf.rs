@@ -69,8 +69,11 @@ impl DocumentState {
             };
             
             let p_css = format!(
-                "text-align:{};margin-top:{:.2}px;margin-bottom:{:.2}px;line-height:{};padding-left:{:.2}px;",
+                "text-align:{};margin-left:{:.2}px;margin-right:{:.2}px;text-indent:{:.2}px;margin-top:{:.2}px;margin-bottom:{:.2}px;line-height:{};padding-left:{:.2}px;",
                 paragraph_alignment_css(paragraph.style.alignment),
+                points_to_css_px(paragraph.style.left_indent_points),
+                points_to_css_px(paragraph.style.right_indent_points),
+                points_to_css_px(paragraph.style.first_line_indent_points),
                 points_to_css_px(paragraph.style.spacing_before_points as f32),
                 points_to_css_px(paragraph.style.spacing_after_points as f32),
                 line_spacing_css_pdf(paragraph.style.line_spacing),

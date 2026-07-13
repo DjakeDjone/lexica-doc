@@ -188,9 +188,12 @@ impl StyleBuilder {
         for (name, style) in &self.paragraph_styles {
             let _ = write!(
                 xml,
-                "<style:style style:name=\"{}\" style:family=\"paragraph\"><style:paragraph-properties fo:text-align=\"{}\" fo:margin-top=\"{}pt\" fo:margin-bottom=\"{}pt\" {} {}/></style:style>",
+                "<style:style style:name=\"{}\" style:family=\"paragraph\"><style:paragraph-properties fo:text-align=\"{}\" fo:margin-left=\"{}pt\" fo:margin-right=\"{}pt\" fo:text-indent=\"{}pt\" fo:margin-top=\"{}pt\" fo:margin-bottom=\"{}pt\" {} {}/></style:style>",
                 name,
                 odt_alignment(style.alignment),
+                style.left_indent_points,
+                style.right_indent_points,
+                style.first_line_indent_points,
                 style.spacing_before_points,
                 style.spacing_after_points,
                 odt_line_height(style.line_spacing),
@@ -255,6 +258,9 @@ impl From<CharacterStyle> for StyleKey {
 struct ParagraphKey {
     alignment: ParagraphAlignment,
     page_break_before: bool,
+    left_indent_twips: i32,
+    right_indent_twips: i32,
+    first_line_indent_twips: i32,
     spacing_before_points: u16,
     spacing_after_points: u16,
     line_spacing_kind: u8,
@@ -271,6 +277,9 @@ impl From<ParagraphStyle> for ParagraphKey {
         Self {
             alignment: style.alignment,
             page_break_before: style.page_break_before,
+            left_indent_twips: (style.left_indent_points * 20.0).round() as i32,
+            right_indent_twips: (style.right_indent_points * 20.0).round() as i32,
+            first_line_indent_twips: (style.first_line_indent_points * 20.0).round() as i32,
             spacing_before_points: style.spacing_before_points,
             spacing_after_points: style.spacing_after_points,
             line_spacing_kind: kind,
