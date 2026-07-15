@@ -68,6 +68,7 @@ pub fn open_document_from_path(
             canvas.active_paragraph_style = ParagraphStyle::default();
             canvas.imported_docx_view = imported_document;
             canvas.pan = egui::Vec2::ZERO;
+            canvas.ignored_grammar_errors.clear();
             canvas.image_textures.clear();
             canvas.selected_image_id = None;
             canvas.image_rects.clear();

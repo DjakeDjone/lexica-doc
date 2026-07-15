@@ -498,8 +498,6 @@ fn centered_nav_hint(ui: &mut egui::Ui, width: f32, text: &str, color: egui::Col
     );
 }
 
-
-
 pub(super) fn backstage_two_line_row(
     ui: &mut egui::Ui,
     title: &str,

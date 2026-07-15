@@ -2,12 +2,13 @@ use eframe::egui;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::document::{
-    CharacterStyle, DocumentTable, FontChoice, PageMargins, PageSize, TableCell, TextRun,
-    OBJECT_REPLACEMENT_CHAR,
+    CharacterStyle, DocumentTable, FontChoice, ListKind, PageMargins, PageSize, ParagraphStyle,
+    TableCell, TextRun, OBJECT_REPLACEMENT_CHAR,
 };
 
 pub(super) struct MarkdownImport {
     pub runs: Vec<TextRun>,
+    pub paragraph_styles: Vec<ParagraphStyle>,
     pub paragraph_tables: Vec<Option<DocumentTable>>,
 }
 
@@ -19,9 +20,10 @@ pub(super) fn import_markdown(source: &str) -> MarkdownImport {
 
     let mut runs = Vec::new();
     let mut stack = vec![CharacterStyle::default()];
-    let mut pending_prefix = String::new();
+    let mut pending_list_kind = None;
+    let mut list_kinds = Vec::new();
+    let mut list_paragraphs = Vec::new();
     let mut heading_level = None;
-    let mut list_depth = 0usize;
     let mut tables = Vec::new();
     let mut table_columns = 0usize;
     let mut table_rows = Vec::new();
@@ -51,11 +53,14 @@ pub(super) fn import_markdown(source: &str) -> MarkdownImport {
                         next.text_color = egui::Color32::from_rgb(86, 90, 100);
                     }
                     Tag::Item => {
-                        pending_prefix.push_str(&"  ".repeat(list_depth.saturating_sub(1)));
-                        pending_prefix.push_str("• ");
+                        pending_list_kind = list_kinds.last().copied();
                     }
-                    Tag::List(_) => {
-                        list_depth += 1;
+                    Tag::List(start) => {
+                        list_kinds.push(if start.is_some() {
+                            ListKind::Ordered
+                        } else {
+                            ListKind::Bullet
+                        });
                     }
                     Tag::Table(alignments) => {
                         table_columns = alignments.len();
@@ -79,13 +84,16 @@ pub(super) fn import_markdown(source: &str) -> MarkdownImport {
                         "\n\n",
                         *stack.last().unwrap_or(&CharacterStyle::default()),
                     ),
-                    TagEnd::Item => append_plain(
-                        &mut runs,
-                        "\n",
-                        *stack.last().unwrap_or(&CharacterStyle::default()),
-                    ),
+                    TagEnd::Item => {
+                        pending_list_kind = None;
+                        append_plain(
+                            &mut runs,
+                            "\n",
+                            *stack.last().unwrap_or(&CharacterStyle::default()),
+                        );
+                    }
                     TagEnd::List(_) => {
-                        list_depth = list_depth.saturating_sub(1);
+                        list_kinds.pop();
                         append_plain(
                             &mut runs,
                             "\n",
@@ -134,15 +142,12 @@ pub(super) fn import_markdown(source: &str) -> MarkdownImport {
                 }
             }
             Event::Text(text) => {
-                if !pending_prefix.is_empty() {
-                    let target = table_cell.as_mut().unwrap_or(&mut runs);
-                    append_plain(
-                        target,
-                        &pending_prefix,
-                        *stack.last().unwrap_or(&CharacterStyle::default()),
-                    );
-                    pending_prefix.clear();
-                }
+                mark_list_paragraph(
+                    &runs,
+                    table_cell.is_none(),
+                    &mut pending_list_kind,
+                    &mut list_paragraphs,
+                );
                 let target = table_cell.as_mut().unwrap_or(&mut runs);
                 append_plain(
                     target,
@@ -151,6 +156,12 @@ pub(super) fn import_markdown(source: &str) -> MarkdownImport {
                 );
             }
             Event::Code(text) => {
+                mark_list_paragraph(
+                    &runs,
+                    table_cell.is_none(),
+                    &mut pending_list_kind,
+                    &mut list_paragraphs,
+                );
                 let mut style = *stack.last().unwrap_or(&CharacterStyle::default());
                 style.font_choice = FontChoice::Monospace;
                 style.highlight_color = egui::Color32::from_rgb(243, 243, 243);
@@ -185,6 +196,10 @@ pub(super) fn import_markdown(source: &str) -> MarkdownImport {
     }
 
     let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+    let mut paragraph_styles = vec![ParagraphStyle::default(); text.matches('\n').count() + 1];
+    for (index, kind) in list_paragraphs {
+        paragraph_styles[index].list_kind = kind;
+    }
     let mut tables = tables.into_iter();
     let paragraph_tables = text
         .split('\n')
@@ -197,7 +212,24 @@ pub(super) fn import_markdown(source: &str) -> MarkdownImport {
 
     MarkdownImport {
         runs,
+        paragraph_styles,
         paragraph_tables,
+    }
+}
+
+fn mark_list_paragraph(
+    runs: &[TextRun],
+    is_document_text: bool,
+    pending: &mut Option<ListKind>,
+    paragraphs: &mut Vec<(usize, ListKind)>,
+) {
+    if let Some(kind) = pending.take() {
+        if is_document_text {
+            paragraphs.push((
+                runs.iter().map(|run| run.text.matches('\n').count()).sum(),
+                kind,
+            ));
+        }
     }
 }
 

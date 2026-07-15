@@ -31,7 +31,7 @@ use crate::{
         centered_page_rect, document_points_to_screen_points, fit_page_zoom,
         section_page_content_rect,
     },
-    ui::squiggles::{paint_grammar_squiggles, ReplacementAction, SquigglePageSlice},
+    ui::squiggles::{paint_grammar_squiggles, GrammarAction, ReplacementAction, SquigglePageSlice},
 };
 
 use editor_input::{apply_viewport_input, handle_keyboard_input, handle_pointer_interaction};
@@ -187,10 +187,11 @@ fn paint_document_canvas_frame(
         });
     }
 
+    let mut keyboard_changed = false;
     let (mut document_layout, page_layout) = if has_focus && canvas.active_header_footer.is_none() {
         let dl = cached_layout_document(ui, document, canvas, content_size.x);
-        let changed = handle_keyboard_input(ui, document, canvas, &dl.galley, history);
-        if changed {
+        keyboard_changed = handle_keyboard_input(ui, document, canvas, &dl.galley, history);
+        if keyboard_changed {
             output.text_changed = true;
             let dl2 = cached_layout_document(ui, document, canvas, content_size.x);
             let pl = layout_page_stack(
@@ -264,6 +265,7 @@ fn paint_document_canvas_frame(
     let mut new_table_cell_rects: Vec<(usize, usize, usize, Rect)> = Vec::new();
     let mut new_table_cell_content_rects: Vec<(usize, usize, usize, Rect)> = Vec::new();
     let mut new_table_resize_handles: Vec<TableResizeHandleRect> = Vec::new();
+    let mut table_caret_rects = Vec::new();
     let move_preview = canvas.move_drag.as_ref().map(|drag| {
         (
             drag.image_id,
@@ -410,6 +412,9 @@ fn paint_document_canvas_frame(
                     time: ui.input(|i| i.time),
                 },
             );
+            if let Some(caret_rect) = geometry.caret_rect {
+                table_caret_rects.push(caret_rect);
+            }
             new_table_cell_rects.extend(
                 geometry
                     .cell_rects
@@ -532,12 +537,13 @@ fn paint_document_canvas_frame(
             end_y: page.end_y,
         })
         .collect();
-    let pending_replacement = paint_grammar_squiggles(
+    let pending_grammar_action = paint_grammar_squiggles(
         ui,
         &painter,
         &document_layout.galley,
         &squiggle_pages,
         grammar_errors,
+        &canvas.ignored_grammar_errors,
     );
 
     canvas.image_rects = new_image_rects;
@@ -615,17 +621,72 @@ fn paint_document_canvas_frame(
         }
     }
 
+    if keyboard_changed {
+        let caret_rect = if canvas.active_table_cell.is_some() {
+            table_caret_rects.into_iter().min_by(|left, right| {
+                viewport_distance(*left, viewport).total_cmp(&viewport_distance(*right, viewport))
+            })
+        } else {
+            page_layout.caret_rect(
+                &document_layout.galley,
+                canvas.selection.primary,
+                caret_height(canvas.active_style, canvas.zoom),
+            )
+        };
+        if caret_rect.is_some_and(|rect| reveal_rect(viewport, rect, canvas)) {
+            ui.ctx().request_repaint();
+        }
+    }
+
     output.page_count = page_layout.pages.len();
     output.current_page =
         page_layout.current_page(&document_layout.galley, canvas.selection.primary);
 
-    if let Some(replacement) = pending_replacement {
-        if apply_grammar_replacement(document, canvas, history, ui, replacement) {
-            output.text_changed = true;
+    if let Some(action) = pending_grammar_action {
+        match action {
+            GrammarAction::Replace(replacement) => {
+                if apply_grammar_replacement(document, canvas, history, ui, replacement) {
+                    output.text_changed = true;
+                }
+            }
+            GrammarAction::Ignore {
+                byte_start,
+                byte_end,
+                rule_id,
+            } => {
+                canvas
+                    .ignored_grammar_errors
+                    .push((byte_start, byte_end, rule_id));
+                ui.ctx().request_repaint();
+            }
         }
     }
 
     output
+}
+
+fn viewport_distance(rect: Rect, viewport: Rect) -> f32 {
+    if rect.bottom() < viewport.top() {
+        viewport.top() - rect.bottom()
+    } else if rect.top() > viewport.bottom() {
+        rect.top() - viewport.bottom()
+    } else {
+        0.0
+    }
+}
+
+fn reveal_rect(viewport: Rect, rect: Rect, canvas: &mut CanvasState) -> bool {
+    let visible = viewport.shrink(24.0);
+    let delta = if rect.top() < visible.top() {
+        visible.top() - rect.top()
+    } else if rect.bottom() > visible.bottom() {
+        visible.bottom() - rect.bottom()
+    } else {
+        return false;
+    };
+    canvas.pan.y += delta;
+    canvas.scroll_velocity = egui::Vec2::ZERO;
+    true
 }
 
 fn scrollbar_rects(viewport: Rect, canvas: &CanvasState) -> Option<(Rect, Rect, f32)> {

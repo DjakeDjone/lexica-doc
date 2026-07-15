@@ -24,6 +24,7 @@ pub(super) struct TablePaintGeometry {
     pub(super) cell_rects: Vec<(usize, usize, usize, Rect)>,
     pub(super) cell_content_rects: Vec<(usize, usize, usize, Rect)>,
     pub(super) resize_handles: Vec<TableResizeHandleRect>,
+    pub(super) caret_rect: Option<Rect>,
 }
 
 #[derive(Clone, Copy)]
@@ -59,6 +60,7 @@ pub(super) fn paint_table(
         cell_rects: Vec::new(),
         cell_content_rects: Vec::new(),
         resize_handles: Vec::new(),
+        caret_rect: None,
     };
 
     let actual_row_heights = table_row_heights_screen(painter, table, zoom);
@@ -180,6 +182,7 @@ pub(super) fn paint_table(
                     text_pos,
                     zoom,
                 ) {
+                    geometry.caret_rect = Some(caret_rect);
                     paint_text_cursor(
                         ui,
                         painter,

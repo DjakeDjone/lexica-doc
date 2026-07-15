@@ -101,6 +101,7 @@ impl DocumentState {
                 let imported = import_markdown(&source);
                 let mut document = Self::bootstrap();
                 document.replace_with_runs(title, imported.runs);
+                document.paragraph_styles = imported.paragraph_styles;
                 document.paragraph_tables = imported.paragraph_tables;
                 document.ensure_paragraph_style_count();
                 return Ok(document);

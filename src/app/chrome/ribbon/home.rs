@@ -4,9 +4,9 @@ use super::common::{alignment_button, format_button, ribbon_group};
 use crate::app::{
     actions::{
         set_font_choice, set_font_size, set_highlight_color, set_paragraph_alignment,
-        set_paragraph_indents,
-        set_text_color, toggle_bold, toggle_bullet_list, toggle_italic, toggle_ordered_list,
-        toggle_strikethrough, toggle_subscript, toggle_superscript, toggle_underline,
+        set_paragraph_indents, set_text_color, toggle_bold, toggle_bullet_list, toggle_italic,
+        toggle_ordered_list, toggle_strikethrough, toggle_subscript, toggle_superscript,
+        toggle_underline,
     },
     find_replace::FindReplaceState,
     palette::{theme_switch, ThemeMode, ThemePalette},

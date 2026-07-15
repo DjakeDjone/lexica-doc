@@ -178,14 +178,9 @@ pub fn layout_document(
             0.0
         };
         let base_indent = list_indent
-            + document_points_to_screen_points(
-                paragraph.style.left_indent_points,
-                canvas.zoom,
-            );
-        let right_indent = document_points_to_screen_points(
-            paragraph.style.right_indent_points,
-            canvas.zoom,
-        );
+            + document_points_to_screen_points(paragraph.style.left_indent_points, canvas.zoom);
+        let right_indent =
+            document_points_to_screen_points(paragraph.style.right_indent_points, canvas.zoom);
         let (indent, paragraph_wrap_width) = side_wrap_flow
             .as_ref()
             .filter(|flow| flow.pending_top_height <= 0.0)

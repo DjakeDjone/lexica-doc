@@ -29,6 +29,21 @@ fn run_headless_layout(
 }
 
 #[test]
+fn typing_scrolls_the_caret_inside_the_viewport() {
+    let viewport = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let caret = Rect::from_min_size(egui::pos2(100.0, 610.0), egui::vec2(1.0, 20.0));
+    let mut canvas = CanvasState {
+        pan: egui::vec2(0.0, -100.0),
+        scroll_velocity: egui::vec2(0.0, 500.0),
+        ..CanvasState::default()
+    };
+
+    assert!(reveal_rect(viewport, caret, &mut canvas));
+    assert_eq!(canvas.pan.y, -154.0);
+    assert_eq!(canvas.scroll_velocity, egui::Vec2::ZERO);
+}
+
+#[test]
 fn unchanged_document_layout_is_reused() {
     let ctx = egui::Context::default();
     let mut document = make_document(

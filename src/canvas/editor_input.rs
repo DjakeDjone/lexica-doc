@@ -8,9 +8,10 @@ use eframe::egui::{
 use crate::{
     app::{CanvasState, ChangeHistory, ZoomMode},
     document::DocumentState,
+    layout::document_points_to_screen_points,
 };
 
-use super::page_layout::PageLayout;
+use super::{page_layout::PageLayout, table::table_cell_text_galley};
 
 pub(super) fn apply_viewport_input(
     ui: &mut egui::Ui,
@@ -24,7 +25,14 @@ pub(super) fn apply_viewport_input(
     let scroll_delta = ui.input(|input| input.smooth_scroll_delta());
     if ui.input(|input| input.modifiers.command) {
         canvas.scroll_velocity = egui::Vec2::ZERO;
-        let zoom_delta = ui.input(|input| input.zoom_delta());
+        let zoom_delta = ui.input(|input| {
+            let gesture_delta = input.zoom_delta();
+            if gesture_delta != 1.0 {
+                gesture_delta
+            } else {
+                (input.smooth_scroll_delta().y * 0.01).exp()
+            }
+        });
         if zoom_delta != 1.0 {
             canvas.zoom_mode = ZoomMode::Manual;
             canvas.scale_view(zoom_delta);
@@ -329,7 +337,9 @@ pub(super) fn handle_keyboard_input(
                     | Key::End
                     | Key::A => {
                         if canvas.active_table_cell.is_some() {
-                            move_active_table_cell_cursor_by_key(document, canvas, key, modifiers);
+                            move_active_table_cell_cursor_by_key(
+                                ui, document, canvas, key, modifiers,
+                            );
                             canvas.last_interaction_time = ui.input(|i| i.time);
                         } else if canvas.selection.on_key_press(os, galley, &modifiers, key) {
                             canvas.active_style =
@@ -532,6 +542,7 @@ fn move_active_table_cell(document: &DocumentState, canvas: &mut CanvasState, fo
 }
 
 fn move_active_table_cell_cursor_by_key(
+    ui: &egui::Ui,
     document: &DocumentState,
     canvas: &mut CanvasState,
     key: Key,
@@ -540,34 +551,30 @@ fn move_active_table_cell_cursor_by_key(
     let Some((table_id, row, col)) = canvas.active_table_cell else {
         return;
     };
-    let Some(text) = document.table_cell_text(table_id, row, col) else {
+    let Some(table) = document.table_by_id(table_id) else {
         return;
     };
-
-    let len = text.chars().count();
-    let selected = canvas.table_cell_selection.as_sorted_char_range();
-    let current = canvas.table_cell_selection.primary.index.min(len);
-    let next = match key {
-        Key::ArrowLeft if selected.start < selected.end && !modifiers.shift => selected.start,
-        Key::ArrowRight if selected.start < selected.end && !modifiers.shift => selected.end,
-        Key::ArrowLeft => current.saturating_sub(1),
-        Key::ArrowRight => (current + 1).min(len),
-        Key::Home | Key::ArrowUp => 0,
-        Key::End | Key::ArrowDown => len,
-        Key::A if modifiers.command => {
-            canvas.table_cell_selection = CCursorRange::two(CCursor::new(0), CCursor::new(len));
-            return;
-        }
-        _ => current,
+    let Some(cell) = table.rows.get(row).and_then(|cells| cells.get(col)) else {
+        return;
     };
+    let width_points: f32 = table
+        .col_widths_points
+        .iter()
+        .skip(col)
+        .take(cell.col_span.max(1) as usize)
+        .sum();
+    let available_width =
+        document_points_to_screen_points(width_points - 8.0, canvas.zoom).max(1.0);
+    let galley = table_cell_text_galley(ui.painter(), cell, available_width, canvas.zoom);
 
-    if modifiers.shift {
-        canvas.table_cell_selection.primary = CCursor::new(next);
-    } else {
-        canvas.table_cell_selection = CCursorRange::one(CCursor::new(next));
-    }
-    if let Some(style) = document.table_cell_style_at(table_id, row, col, next) {
-        canvas.active_style = style;
+    if canvas
+        .table_cell_selection
+        .on_key_press(ui.ctx().os(), &galley, &modifiers, key)
+    {
+        let next = canvas.table_cell_selection.primary.index;
+        if let Some(style) = document.table_cell_style_at(table_id, row, col, next) {
+            canvas.active_style = style;
+        }
     }
 }
 
@@ -734,14 +741,16 @@ fn is_word_char(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui::{epaint::text::cursor::CCursor, text_selection::CCursorRange};
+    use eframe::egui::{
+        epaint::text::cursor::CCursor, text_selection::CCursorRange, Key, Modifiers,
+    };
 
     use crate::{
         app::CanvasState,
         document::{CharacterStyle, DocumentState, TextRun},
     };
 
-    use super::{delete_word_backward, delete_word_forward};
+    use super::{delete_word_backward, delete_word_forward, move_active_table_cell_cursor_by_key};
 
     fn document_with_text(text: &str) -> DocumentState {
         let mut document = DocumentState::bootstrap();
@@ -804,5 +813,44 @@ mod tests {
 
         assert_eq!(document.plain_text(), "beta");
         assert_eq!(canvas.selection.primary.index, 0);
+    }
+
+    #[test]
+    fn table_cursor_uses_layout_aware_arrow_navigation() {
+        let ctx = egui::Context::default();
+        let mut document = DocumentState::bootstrap();
+        let table_id = document.insert_table(0, 1, 1);
+        document.set_table_cell_text(table_id, 0, 0, "abc\ndef");
+        let mut canvas = CanvasState {
+            active_table_cell: Some((table_id, 0, 0)),
+            table_cell_selection: CCursorRange::one(CCursor::new(1)),
+            ..CanvasState::default()
+        };
+
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            move_active_table_cell_cursor_by_key(
+                ui,
+                &document,
+                &mut canvas,
+                Key::ArrowDown,
+                Modifiers::NONE,
+            );
+            move_active_table_cell_cursor_by_key(
+                ui,
+                &document,
+                &mut canvas,
+                Key::ArrowRight,
+                Modifiers::CTRL | Modifiers::SHIFT,
+            );
+        });
+
+        assert_eq!(canvas.table_cell_selection.secondary.index, 5);
+        assert_eq!(canvas.table_cell_selection.primary.index, 7);
+    }
+
+    #[test]
+    fn ctrl_scroll_zoom_direction_is_natural() {
+        assert!((20.0_f32 * 0.01).exp() > 1.0);
+        assert!((-20.0_f32 * 0.01).exp() < 1.0);
     }
 }

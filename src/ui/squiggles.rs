@@ -21,17 +21,36 @@ pub struct ReplacementAction {
     pub replacement: String,
 }
 
+#[derive(Clone, Debug)]
+pub enum GrammarAction {
+    Replace(ReplacementAction),
+    Ignore {
+        byte_start: usize,
+        byte_end: usize,
+        rule_id: String,
+    },
+}
+
 pub fn paint_grammar_squiggles(
     ui: &mut egui::Ui,
     painter: &Painter,
     galley: &egui::Galley,
     pages: &[SquigglePageSlice],
     errors: &[GrammarError],
-) -> Option<ReplacementAction> {
-    let mut selected_replacement: Option<ReplacementAction> = None;
+    ignored_errors: &[(usize, usize, String)],
+) -> Option<GrammarAction> {
+    let mut action = None;
     let text = galley.text();
 
     for error in errors {
+        if ignored_errors.iter().any(|(start, end, rule_id)| {
+            (*start, *end, rule_id) == (error.byte_start, error.byte_end, &error.rule_id)
+        }) {
+            continue;
+        }
+        if action.is_some() {
+            break;
+        }
         let start_char = byte_to_char_index(text, error.byte_start);
         let mut end_char = byte_to_char_index(text, error.byte_end);
         if end_char <= start_char {
@@ -44,22 +63,34 @@ pub fn paint_grammar_squiggles(
             let response =
                 ui.allocate_rect(segment_rect.expand2(egui::vec2(0.0, 3.0)), Sense::hover());
 
-            if selected_replacement.is_none() {
+            if action.is_none() {
                 egui::Tooltip::for_enabled(&response).show(|ui| {
                     ui.set_min_width(150.0);
                     ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                         for replacement in error.replacements.iter().take(5) {
                             if ui.selectable_label(false, replacement).clicked() {
-                                selected_replacement = Some(ReplacementAction {
+                                action = Some(GrammarAction::Replace(ReplacementAction {
                                     byte_start: error.byte_start,
                                     byte_end: error.byte_end,
                                     replacement: replacement.clone(),
-                                });
+                                }));
                             }
                         }
 
                         if error.replacements.is_empty() {
-                            ui.label(egui::RichText::new("No replacements available.").weak().italics());
+                            ui.label(
+                                egui::RichText::new("No replacements available.")
+                                    .weak()
+                                    .italics(),
+                            );
+                        }
+
+                        if ui.button("Ignore suggestion").clicked() {
+                            action = Some(GrammarAction::Ignore {
+                                byte_start: error.byte_start,
+                                byte_end: error.byte_end,
+                                rule_id: error.rule_id.clone(),
+                            });
                         }
                     });
                 });
@@ -67,7 +98,7 @@ pub fn paint_grammar_squiggles(
         }
     }
 
-    selected_replacement
+    action
 }
 
 fn draw_squiggle(painter: &Painter, rect: Rect) {

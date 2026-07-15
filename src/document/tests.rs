@@ -635,6 +635,45 @@ fn imports_markdown_tables_as_tables() {
 }
 
 #[test]
+fn markdown_lists_survive_save_and_reopen_as_lists() {
+    let mut path = std::env::temp_dir();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    path.push(format!("wors-markdown-list-{stamp}.md"));
+    fs::write(&path, "- first\n- second\n\n1. third\n2. fourth\n").expect("markdown fixture");
+
+    let document = DocumentState::load_from_path(&path).expect("markdown import");
+    document.save_to_path(&path).expect("markdown save");
+    let reopened = DocumentState::load_from_path(&path).expect("markdown reopen");
+    let listed: Vec<_> = reopened
+        .paragraphs()
+        .into_iter()
+        .filter(|paragraph| paragraph.style.list_kind != ListKind::None)
+        .map(|paragraph| {
+            (
+                paragraph.style.list_kind,
+                plain_text_from_runs(&paragraph.runs),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        listed,
+        vec![
+            (ListKind::Bullet, "first".to_owned()),
+            (ListKind::Bullet, "second".to_owned()),
+            (ListKind::Ordered, "third".to_owned()),
+            (ListKind::Ordered, "fourth".to_owned()),
+        ]
+    );
+    assert!(!reopened.plain_text().contains('•'));
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn test_print_html_css() {
     let mut doc = DocumentState::bootstrap();
     let style = CharacterStyle {

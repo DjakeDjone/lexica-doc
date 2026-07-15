@@ -734,6 +734,9 @@ impl App for WorsApp {
             }
         }
         if shortcut_changed || canvas_output.text_changed {
+            if canvas_output.text_changed {
+                self.canvas.ignored_grammar_errors.clear();
+            }
             self.request_grammar_check(false);
         }
 
